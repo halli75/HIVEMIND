@@ -21,7 +21,7 @@
 - [x] Verify frontend build or static type check.
 - [x] Verify contracts compile or identify missing dependency setup.
 - [x] Update README with setup commands and current status.
-- [ ] Commit and push the scaffold.
+- [x] Commit and push the scaffold.
 
 ## Review
 
