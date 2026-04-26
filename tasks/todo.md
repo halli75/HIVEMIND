@@ -4,11 +4,11 @@
 
 - [x] Create project directory.
 - [x] Add project-specific `AGENTS.md`.
-- [ ] Initialize local Git repository.
-- [ ] Create GitHub repository.
+- [x] Initialize local Git repository.
+- [x] Create GitHub repository.
 - [ ] Verify remote configuration.
 
 ## Review
 
-Pending.
-
+- Local project scaffold created at `C:\Users\arnav\arnav\HIVEMIND`.
+- GitHub repository created as `halli75/HIVEMIND`.
