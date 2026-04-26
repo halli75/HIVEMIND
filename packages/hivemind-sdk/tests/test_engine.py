@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from hivemind_sdk import Scenario, SwarmEngine
+from hivemind_sdk import AxlMessage, Scenario, SwarmEngine, append_jsonl
 
 
 def test_engine_is_deterministic_for_same_seed_and_scenario() -> None:
@@ -85,3 +85,47 @@ def test_seed_replay_adds_partner_proof_fields_and_saves_transcript(tmp_path: Pa
     payload = json.loads(transcript_path.read_text(encoding="utf-8"))
     assert payload["schema"] == "hivemind.run.transcript.v0"
     assert payload["snapshot"]["run_mode"] == "mock"
+
+
+def test_engine_uses_local_axl_transcript_metrics(tmp_path: Path) -> None:
+    transcript = tmp_path / "axl.jsonl"
+    append_jsonl(
+        transcript,
+        AxlMessage.create(
+            source_node="axl-node-a",
+            target="axl-node-b",
+            message_type="SCENARIO_SHOCK",
+            payload={"scenario_id": "local-axl-engine"},
+        ),
+    )
+    append_jsonl(
+        transcript,
+        AxlMessage.create(
+            source_node="axl-node-b",
+            target="axl-node-a",
+            message_type="TRADE_INTENT",
+            payload={"received_message_id": "axl-1", "decision": "hedge"},
+            latency_ms=12.5,
+        ),
+    )
+    engine = SwarmEngine(agent_count=6, seed="local-axl", axl_transcript_path=transcript)
+
+    snapshot = engine.inject_scenario(
+        Scenario(
+            scenario_id="local-axl-engine",
+            label="Local AXL engine",
+            volatility=0.5,
+            liquidity_delta=-0.1,
+            sentiment=0.2,
+            gas_pressure=0.2,
+            signal_strength=0.6,
+        )
+    )
+
+    assert snapshot.run_mode == "local_axl"
+    assert snapshot.integrations.gensyn_axl["mode"] == "local_axl"
+    assert snapshot.integrations.gensyn_axl["messages"] == 2
+    assert snapshot.integrations.gensyn_axl["nodes_online"] == 2
+    assert snapshot.integrations.gensyn_axl["last_message_type"] == "TRADE_INTENT"
+    assert snapshot.transcript["axl_p50_latency_ms"] == 12.5
+    assert snapshot.proof["axl"]["transcript_path"] == str(transcript)

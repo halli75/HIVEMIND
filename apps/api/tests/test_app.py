@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from hivemind_api import create_app
-from hivemind_sdk import SwarmEngine
+from hivemind_sdk import AxlMessage, SwarmEngine, append_jsonl
 
 
 def _client() -> TestClient:
@@ -65,11 +65,12 @@ def test_websocket_streams_initial_state_and_accepts_scenario_injection() -> Non
     assert event["snapshot"]["integrations"]["gensyn_axl"]["mode"] == "mock"
 
 
-def test_health_is_local_mock() -> None:
+def test_health_reports_current_run_mode() -> None:
     response = _client().get("/health")
 
     assert response.status_code == 200
     assert response.json()["mode"] == "local-mock"
+    assert response.json()["run_mode"] == "mock"
 
 
 def test_default_app_wires_seed_replay_and_transcript_output(tmp_path: Path) -> None:
@@ -90,3 +91,44 @@ def test_default_app_wires_seed_replay_and_transcript_output(tmp_path: Path) -> 
     assert snapshot["proof"]["zero_g_storage"]["readback"]["ok"] is True
     assert snapshot["proof"]["uniswap"]["quote"]["quoteId"] == "mock-quote-alpha-001"
     assert Path(snapshot["transcript"]["path"]).exists()
+
+
+def test_default_app_can_read_local_axl_transcript(tmp_path: Path, monkeypatch) -> None:
+    transcript = tmp_path / "axl.jsonl"
+    append_jsonl(
+        transcript,
+        AxlMessage.create(
+            source_node="axl-node-a",
+            target="axl-node-b",
+            message_type="SCENARIO_SHOCK",
+            payload={"scenario_id": "api-local-axl"},
+        ),
+    )
+    append_jsonl(
+        transcript,
+        AxlMessage.create(
+            source_node="axl-node-b",
+            target="axl-node-a",
+            message_type="INFERENCE_RESULT",
+            payload={"decision": "rank_adjustment"},
+            latency_ms=8.0,
+        ),
+    )
+    monkeypatch.setenv("HIVEMIND_USE_MOCK_GENSYN", "false")
+    client = TestClient(
+        create_app(
+            seed_snapshot_dir=tmp_path / "missing-seeds",
+            transcript_root=tmp_path / "runs",
+            axl_transcript_path=transcript,
+        )
+    )
+
+    health = client.get("/health").json()
+    response = client.post("/scenario", json=_scenario_payload("api-local-axl"))
+
+    assert health["run_mode"] == "local_axl"
+    snapshot = response.json()["snapshot"]
+    assert snapshot["run_mode"] == "local_axl"
+    assert snapshot["integrations"]["gensyn_axl"]["mode"] == "local_axl"
+    assert snapshot["integrations"]["gensyn_axl"]["messages"] == 2
+    assert snapshot["proof"]["axl"]["nodes_online"] == 2

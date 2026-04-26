@@ -12,10 +12,11 @@ HIVEMIND simulates a DeFi swarm, crystallizes the winning strategy into an iNFT-
 
 ## Status
 
-Phase 1 local vertical slice is live:
+Phase 2 local AXL proof is live:
 
 - `packages/hivemind-sdk`: deterministic swarm engine, provider adapter boundaries, seed replay, tier metrics, scenario injection, and transcript output.
 - `apps/api`: FastAPI REST and WebSocket API as the canonical scenario/state surface.
+- `apps/axl-node`: local AXL-compatible coordinator/evaluator processes over TCP JSONL with transcript evidence.
 - `apps/web`: React/Vite dashboard backed by the API/WebSocket stream with mock fallback.
 - `contracts`: Hardhat scaffold with a minimal `HivemindINFT` contract shape for 0G iNFT proof work.
 - `data`: deterministic seed snapshots for local simulation.
@@ -28,8 +29,24 @@ Use `npm.cmd` on Windows PowerShell if `npm.ps1` is blocked by execution policy.
 ### SDK and API Tests
 
 ```powershell
+$env:PYTHONPATH='packages/hivemind-sdk/src;apps/api/src;apps/axl-node/src'
+C:\Python313\python.exe -m pytest packages/hivemind-sdk/tests apps/api/tests apps/axl-node/tests -q
+```
+
+### Local AXL Smoke
+
+```powershell
+$env:PYTHONPATH='packages/hivemind-sdk/src;apps/axl-node/src'
+C:\Python313\python.exe -m hivemind_axl_node smoke --messages 20 --transcript runs/axl/smoke.jsonl
+```
+
+To make the API/dashboard read that transcript as the active AXL source:
+
+```powershell
 $env:PYTHONPATH='packages/hivemind-sdk/src;apps/api/src'
-C:\Python313\python.exe -m pytest packages/hivemind-sdk/tests apps/api/tests -q
+$env:HIVEMIND_USE_MOCK_GENSYN='false'
+$env:GENSYN_AXL_TRANSCRIPT_PATH='runs/axl/smoke.jsonl'
+C:\Python313\python.exe -m uvicorn hivemind_api.app:app --host localhost --port 8000
 ```
 
 ### API Server
@@ -77,4 +94,4 @@ cd contracts
 
 ## Current Boundaries
 
-Phase 1 is local/mock-first with deterministic replay proofs. It does not yet claim live Gensyn AXL, 0G Compute/Storage, iNFT testnet minting, or Uniswap API execution. ENS, KeeperHub, breeding, marketplace, LP management, live GraphRAG, and mainnet execution remain off the critical path.
+Phase 2 proves local cross-process AXL-style messaging and keeps live Gensyn/RL Swarm as a gated attempt. It does not yet claim live 0G Compute/Storage, iNFT testnet minting, or Uniswap API execution. ENS, KeeperHub, breeding, marketplace, LP management, live GraphRAG, and mainnet execution remain off the critical path.

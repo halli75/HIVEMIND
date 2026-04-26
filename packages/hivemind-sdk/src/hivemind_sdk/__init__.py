@@ -1,6 +1,18 @@
 """Local-first SDK for deterministic HIVEMIND swarm simulations."""
 
 from .archetypes import DEFAULT_ARCHETYPES, archetype_by_name
+from .axl import (
+    AXL_MESSAGE_TYPES,
+    AxlMessage,
+    AxlMessageType,
+    AxlTranscriptStats,
+    append_jsonl,
+    payload_digest,
+    parse_timestamp,
+    read_transcript,
+    transcript_stats,
+    utc_now_iso,
+)
 from .engine import SwarmEngine
 from .models import (
     AgentArchetype,
@@ -15,19 +27,25 @@ from .models import (
 from .providers import (
     ExecutionProvider,
     InferenceProvider,
+    LocalAxlMessageBus,
     MessageBus,
     SeedReplay,
     StorageProvider,
 )
 
 __all__ = [
+    "AXL_MESSAGE_TYPES",
     "AgentArchetype",
     "AgentState",
+    "AxlMessage",
+    "AxlMessageType",
+    "AxlTranscriptStats",
     "DEFAULT_ARCHETYPES",
     "ExecutionProvider",
     "InferenceProvider",
     "IntegrationEnvelope",
     "LeaderboardEntry",
+    "LocalAxlMessageBus",
     "MessageBus",
     "RunMode",
     "Scenario",
@@ -36,5 +54,11 @@ __all__ = [
     "SwarmEngine",
     "SwarmSnapshot",
     "TierMetric",
+    "append_jsonl",
     "archetype_by_name",
+    "payload_digest",
+    "parse_timestamp",
+    "read_transcript",
+    "transcript_stats",
+    "utc_now_iso",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -7,7 +8,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from hivemind_sdk import Scenario, SwarmEngine
+from hivemind_sdk import LocalAxlMessageBus, Scenario, SwarmEngine
 
 
 class ScenarioRequest(BaseModel):
@@ -61,15 +62,36 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[4]
 
 
+def _resolve_repo_path(root: Path, value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else root / path
+
+
 def _default_engine(
     *,
     seed_snapshot_dir: str | Path | None = None,
     transcript_root: str | Path | None = None,
+    axl_transcript_path: str | Path | None = None,
 ) -> SwarmEngine:
     root = _repo_root()
+    seed_dir = _resolve_repo_path(
+        root, seed_snapshot_dir or os.environ.get("HIVEMIND_SEED_DIR") or root / "data" / "snapshots"
+    )
+    runs_dir = _resolve_repo_path(root, transcript_root or os.environ.get("HIVEMIND_RUNS_DIR") or root / "runs")
+    transcript_path_value = axl_transcript_path or os.environ.get("GENSYN_AXL_TRANSCRIPT_PATH")
+    use_mock_gensyn = os.environ.get("HIVEMIND_USE_MOCK_GENSYN", "true").lower() in {"1", "true", "yes"}
+    message_bus = None
+    run_mode = None
+    if transcript_path_value and not use_mock_gensyn:
+        transcript_path = _resolve_repo_path(root, transcript_path_value)
+        if transcript_path.exists() and transcript_path.suffix == ".jsonl":
+            message_bus = LocalAxlMessageBus(transcript_path=transcript_path)
+            run_mode = "local_axl"
     return SwarmEngine(
-        seed_snapshot_dir=seed_snapshot_dir or root / "data" / "snapshots",
-        transcript_root=transcript_root or root / "runs",
+        seed_snapshot_dir=seed_dir,
+        transcript_root=runs_dir,
+        message_bus=message_bus,
+        run_mode=run_mode,
     )
 
 
@@ -78,6 +100,7 @@ def create_app(
     engine: SwarmEngine | None = None,
     seed_snapshot_dir: str | Path | None = None,
     transcript_root: str | Path | None = None,
+    axl_transcript_path: str | Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="HIVEMIND API", version="0.1.0")
     app.add_middleware(
@@ -90,14 +113,16 @@ def create_app(
     app.state.engine = engine or _default_engine(
         seed_snapshot_dir=seed_snapshot_dir,
         transcript_root=transcript_root,
+        axl_transcript_path=axl_transcript_path,
     )
     app.state.websocket_hub = WebSocketHub()
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
+        health_mode = "local-axl" if app.state.engine.run_mode == "local_axl" else f"local-{app.state.engine.run_mode}"
         return {
             "ok": True,
-            "mode": "local-mock",
+            "mode": health_mode,
             "run_mode": app.state.engine.run_mode,
             "sequence": app.state.engine.latest_snapshot.sequence,
         }

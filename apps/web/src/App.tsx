@@ -101,6 +101,11 @@ function ConnectionBadges({ badges, error }: { badges: ConnectionBadge[]; error:
 function MetricPanel({ metrics, mode }: { metrics: SwarmMetrics; mode: "api" | "mock" }) {
   const items = [
     ["AXL messages", metrics.axlMessages.toLocaleString()],
+    ["AXL nodes online", metrics.axlNodesOnline.toLocaleString()],
+    ["AXL latest type", metrics.axlLastMessageType],
+    ["AXL p50 latency", metrics.axlP50LatencyMs === null ? "pending" : `${metrics.axlP50LatencyMs.toFixed(1)} ms`],
+    ["AXL p95 latency", metrics.axlP95LatencyMs === null ? "pending" : `${metrics.axlP95LatencyMs.toFixed(1)} ms`],
+    ["AXL failed nodes", metrics.axlFailedNodes.toLocaleString()],
     ["0G inference calls", metrics.zeroGInferenceCalls.toLocaleString()],
     ["AIQ size", `${metrics.aiqSize.toLocaleString()} kb`],
     ["Fallback count", metrics.fallbackCount.toLocaleString()],
@@ -131,6 +136,11 @@ function TranscriptPanel({ transcript }: { transcript: RunTranscript }) {
   const rows = [
     ["Latest scenario", transcript.latestScenario],
     ["Latest AXL messages", transcript.axlMessageCount.toLocaleString()],
+    ["AXL nodes online", transcript.axlNodesOnline.toLocaleString()],
+    ["AXL latest type", transcript.axlLastMessageType],
+    ["AXL p50 latency", transcript.axlP50LatencyMs],
+    ["AXL p95 latency", transcript.axlP95LatencyMs],
+    ["AXL transcript path", transcript.axlTranscriptPath],
     ["Latest 0G storage URI", transcript.zeroGStorageUri],
     ["Latest 0G hash", transcript.zeroGStorageHash],
     ["Latest iNFT token", transcript.inftToken],

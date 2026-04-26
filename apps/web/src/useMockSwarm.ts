@@ -74,6 +74,11 @@ export function useMockSwarm(agentCount: number, scenario: string) {
 
     return {
       axlMessages: 1284 + tick * 21 + scenario.length,
+      axlNodesOnline: 2,
+      axlFailedNodes: 0,
+      axlLastMessageType: tick % 2 === 0 ? "TRADE_INTENT" : "INFERENCE_RESULT",
+      axlP50LatencyMs: 18.5 + (tick % 5),
+      axlP95LatencyMs: 34.75 + (tick % 7),
       zeroGInferenceCalls: 312 + tick * 5 + Math.floor(scenario.length / 8),
       aiqSize: 4096 + agentCount * 18 + tick * 7,
       fallbackCount,

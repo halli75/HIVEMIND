@@ -15,6 +15,11 @@ export type SwarmAgent = {
 
 export type SwarmMetrics = {
   axlMessages: number;
+  axlNodesOnline: number;
+  axlFailedNodes: number;
+  axlLastMessageType: string;
+  axlP50LatencyMs: number | null;
+  axlP95LatencyMs: number | null;
   zeroGInferenceCalls: number;
   aiqSize: number;
   fallbackCount: number;
@@ -51,6 +56,11 @@ export type ConnectionBadge = {
 export type RunTranscript = {
   latestScenario: string;
   axlMessageCount: number;
+  axlNodesOnline: number;
+  axlLastMessageType: string;
+  axlP50LatencyMs: string;
+  axlP95LatencyMs: string;
+  axlTranscriptPath: string;
   zeroGStorageUri: string;
   zeroGStorageHash: string;
   inftToken: string;

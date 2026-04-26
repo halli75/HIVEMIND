@@ -100,6 +100,19 @@ const numberValue = (source: Record<string, unknown> | undefined, keys: string[]
   return fallback;
 };
 
+const nullableNumberValue = (source: Record<string, unknown> | undefined, keys: string[]) => {
+  for (const key of keys) {
+    const value = source?.[key];
+    if (typeof value === "number") return value;
+  }
+  return null;
+};
+
+const stringArrayValue = (source: Record<string, unknown> | undefined, key: string) => {
+  const value = source?.[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+};
+
 const objectValue = (source: Record<string, unknown> | undefined, key: string) => {
   const value = source?.[key];
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -110,6 +123,8 @@ const receiptLabel = (receipt: Record<string, unknown> | undefined) => {
   const status = stringValue(receipt, ["status"], "pending");
   return hash || status;
 };
+
+const latencyLabel = (value: number | null) => (value === null ? "pending" : `${value.toFixed(1)} ms`);
 
 const tierFromApi = (tier: number): AgentTier => {
   if (tier === 1) return "T1";
@@ -217,14 +232,23 @@ function mapSnapshot(snapshot: ApiSnapshot, visualAgentCount: number) {
   const uniswap = integrations.uniswap;
   const proof = snapshot.proof;
   const proofStorage = objectValue(proof, "zero_g_storage");
+  const proofAxl = objectValue(proof, "axl");
   const proofInft = objectValue(proof, "inft");
   const proofUniswap = objectValue(proof, "uniswap");
   const proofReceipt = objectValue(proofUniswap, "swap_receipt");
   const integrationReceipt = objectValue(uniswap, "swap_receipt");
   const fallbackCount = tierMetrics.reduce((sum, tier) => sum + tier.fallback_count, 0);
+  const axlFailedNodes = stringArrayValue(gensynAxl, "failed_nodes");
+  const axlP50LatencyMs = nullableNumberValue(gensynAxl, ["p50_latency_ms"]);
+  const axlP95LatencyMs = nullableNumberValue(gensynAxl, ["p95_latency_ms"]);
 
   const metrics: SwarmMetrics = {
     axlMessages: numberValue(gensynAxl, ["messages", "message_count"], agents.length),
+    axlNodesOnline: numberValue(gensynAxl, ["nodes_online"], 1),
+    axlFailedNodes: axlFailedNodes.length,
+    axlLastMessageType: stringValue(gensynAxl, ["last_message_type"], "pending"),
+    axlP50LatencyMs,
+    axlP95LatencyMs,
     zeroGInferenceCalls: numberValue(
       zeroGCompute,
       ["inference_calls", "calls"],
@@ -248,6 +272,11 @@ function mapSnapshot(snapshot: ApiSnapshot, visualAgentCount: number) {
   const transcript: RunTranscript = {
     latestScenario: `${snapshot.scenario.label} (${snapshot.scenario.scenario_id})`,
     axlMessageCount: metrics.axlMessages,
+    axlNodesOnline: metrics.axlNodesOnline,
+    axlLastMessageType: stringValue(proofAxl, ["last_message_type"], metrics.axlLastMessageType),
+    axlP50LatencyMs: latencyLabel(nullableNumberValue(proofAxl, ["p50_latency_ms"]) ?? metrics.axlP50LatencyMs),
+    axlP95LatencyMs: latencyLabel(nullableNumberValue(proofAxl, ["p95_latency_ms"]) ?? metrics.axlP95LatencyMs),
+    axlTranscriptPath: stringValue(proofAxl, ["transcript_path"], stringValue(gensynAxl, ["transcript_path"])),
     zeroGStorageUri: stringValue(proofStorage, ["uri", "storage_uri"], stringValue(zeroGStorage, ["uri", "storage_uri"])),
     zeroGStorageHash: stringValue(
       proofStorage,
@@ -266,6 +295,11 @@ function mapSnapshot(snapshot: ApiSnapshot, visualAgentCount: number) {
 const mockTranscript = (scenario: string, metrics: SwarmMetrics): RunTranscript => ({
   latestScenario: scenario,
   axlMessageCount: metrics.axlMessages,
+  axlNodesOnline: metrics.axlNodesOnline,
+  axlLastMessageType: metrics.axlLastMessageType,
+  axlP50LatencyMs: latencyLabel(metrics.axlP50LatencyMs),
+  axlP95LatencyMs: latencyLabel(metrics.axlP95LatencyMs),
+  axlTranscriptPath: "mock://axl/offline",
   zeroGStorageUri: "mock://0g-storage/offline/swarm-state",
   zeroGStorageHash: "mock-local",
   inftToken: "pending mint",
@@ -294,11 +328,13 @@ const badgesFor = (mode: "api" | "mock", integrations?: ApiIntegrations): Connec
     return modes.find(Boolean) ?? "mock";
   };
   const labelFor = (name: string, sourceMode: string) => {
+    if (sourceMode === "local_axl") return `${name} live`;
     if (sourceMode.startsWith("live")) return `${name} live`;
     if (sourceMode === "seed_replay") return `${name} replay`;
     return `${name} mock`;
   };
-  const toneFor = (sourceMode: string): ConnectionBadge["tone"] => (sourceMode.startsWith("live") ? "live" : "mock");
+  const toneFor = (sourceMode: string): ConnectionBadge["tone"] =>
+    sourceMode.startsWith("live") || sourceMode === "local_axl" ? "live" : "mock";
 
   return [
     { label: "API connected", tone: "live" },

@@ -22,6 +22,7 @@ from .providers import (
     ExecutionProvider,
     InferenceProvider,
     LocalExecutionProvider,
+    LocalAxlMessageBus,
     LocalInferenceProvider,
     LocalMessageBus,
     LocalStorageProvider,
@@ -80,6 +81,7 @@ class SwarmEngine:
         run_mode: RunMode | None = None,
         seed_snapshot_dir: str | Path | None = None,
         transcript_root: str | Path | None = None,
+        axl_transcript_path: str | Path | None = None,
         inference_provider: InferenceProvider | None = None,
         storage_provider: StorageProvider | None = None,
         message_bus: MessageBus | None = None,
@@ -92,10 +94,14 @@ class SwarmEngine:
 
         self._seed = seed
         self._replay = SeedReplay.from_directory(seed_snapshot_dir)
-        self._run_mode: RunMode = run_mode or "mock"
+        self._run_mode: RunMode = run_mode or ("local_axl" if axl_transcript_path else "mock")
         self._inference_provider = inference_provider or LocalInferenceProvider()
         self._storage_provider = storage_provider or LocalStorageProvider(replay=self._replay)
-        self._message_bus = message_bus or LocalMessageBus(replay=self._replay)
+        self._message_bus = message_bus or (
+            LocalAxlMessageBus(transcript_path=axl_transcript_path)
+            if axl_transcript_path
+            else LocalMessageBus(replay=self._replay)
+        )
         self._execution_provider = execution_provider or LocalExecutionProvider(replay=self._replay)
         self._transcript_recorder: FileTranscriptRecorder | None = None
         self._agents = tuple(
@@ -267,6 +273,12 @@ class SwarmEngine:
         return {
             "latest_scenario": scenario.to_dict(),
             "axl_message_count": integrations.gensyn_axl["messages"],
+            "axl_nodes_online": integrations.gensyn_axl.get("nodes_online", 0),
+            "axl_failed_nodes": integrations.gensyn_axl.get("failed_nodes", []),
+            "axl_last_message_type": integrations.gensyn_axl.get("last_message_type"),
+            "axl_p50_latency_ms": integrations.gensyn_axl.get("p50_latency_ms"),
+            "axl_p95_latency_ms": integrations.gensyn_axl.get("p95_latency_ms"),
+            "axl_transcript_path": integrations.gensyn_axl.get("transcript_path"),
             "axl_messages": integrations.gensyn_axl.get("transcript", []),
         }
 
@@ -282,6 +294,12 @@ class SwarmEngine:
             "latest_scenario": scenario.to_dict(),
             "axl": {
                 "message_count": transcript["axl_message_count"],
+                "nodes_online": transcript["axl_nodes_online"],
+                "failed_nodes": transcript["axl_failed_nodes"],
+                "last_message_type": transcript["axl_last_message_type"],
+                "p50_latency_ms": transcript["axl_p50_latency_ms"],
+                "p95_latency_ms": transcript["axl_p95_latency_ms"],
+                "transcript_path": transcript["axl_transcript_path"],
             },
             "zero_g_storage": {
                 "uri": integrations.zero_g_storage["uri"],

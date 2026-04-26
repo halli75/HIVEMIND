@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from .axl import transcript_stats
 from .models import Action, AgentArchetype, AgentState, LeaderboardEntry, Scenario
 from .scoring import aiq_for, choose_action, confidence_for, pnl_bps_for, score_for
 
@@ -187,8 +188,31 @@ class LocalMessageBus:
             "mode": "seed_replay" if messages else "mock",
             "topic": f"hivemind.scenario.{scenario.scenario_id}",
             "messages": len(messages) if messages else agent_count,
+            "nodes_online": 2 if messages else 1,
+            "last_message_type": messages[-1].get("type") if messages else "SCENARIO_SHOCK",
+            "p50_latency_ms": None,
+            "p95_latency_ms": None,
             "coordinator": "axl_coordinator",
             "transcript": messages,
+        }
+
+
+class LocalAxlMessageBus:
+    def __init__(self, *, transcript_path: str | Path) -> None:
+        self._transcript_path = Path(transcript_path)
+
+    def broadcast_scenario(
+        self,
+        *,
+        scenario: Scenario,
+        agent_count: int,
+    ) -> dict[str, Any]:
+        stats = transcript_stats(self._transcript_path)
+        payload = stats.to_dict()
+        return {
+            **payload,
+            "topic": f"hivemind.scenario.{scenario.scenario_id}",
+            "coordinator": "axl_coordinator",
         }
 
 
