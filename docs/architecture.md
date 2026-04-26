@@ -29,6 +29,17 @@ HIVEMIND simulates a DeFi swarm, crystallizes the winning strategy into an iNFT-
 
 The scaffold is designed so each integration worker can replace mock adapters one at a time while preserving the demo narrative:
 
+- SDK/API: `InferenceProvider`, `StorageProvider`, `MessageBus`, and `ExecutionProvider` define the adapter boundary used by the local engine and API snapshots.
 - 0G worker: replace seeded storage URIs with write/readback proofs and use 0G Compute for active inference.
 - Gensyn worker: replace mock transport with two real node processes and capture message logs.
 - Uniswap worker: replace mock quote with API quote, approval, swap, and transaction receipt.
+
+## Phase 1 Runtime Surface
+
+The local vertical slice is API-driven:
+
+- `POST /scenario` is the canonical scenario injection point.
+- `GET /state`, `GET /leaderboard`, and `GET /metrics/tiers` expose the latest run state.
+- `WS /ws/state` streams the initial snapshot and scenario updates to the dashboard.
+- Snapshots carry explicit run mode and proof fields so the UI can distinguish mock, replay, and future live integration evidence.
+- Local run transcripts are written under ignored `runs/` directories for demo rehearsal evidence.

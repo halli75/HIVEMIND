@@ -94,6 +94,16 @@ textarea {
   box-shadow: 0 0 0 4px rgba(103, 211, 139, 0.15);
 }
 
+.live-dot.mock {
+  background: #d5b65a;
+  box-shadow: 0 0 0 4px rgba(213, 182, 90, 0.15);
+}
+
+.connection-pill.mock {
+  border-color: #746336;
+  color: #e8d285;
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.9fr) minmax(460px, 1.6fr) minmax(320px, 1fr);
@@ -159,6 +169,79 @@ textarea {
 
 .control-row input {
   accent-color: #79b68d;
+}
+
+.run-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 14px 14px;
+}
+
+.run-row button {
+  min-height: 38px;
+  border: 1px solid #76a984;
+  border-radius: 6px;
+  padding: 8px 14px;
+  color: #0f1712;
+  background: #84d79d;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.run-row button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.badges-panel {
+  overflow: hidden;
+}
+
+.badge-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px;
+}
+
+.connection-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  border: 1px solid #4b4943;
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: #d7d0c2;
+  background: #191918;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.connection-badge.live {
+  border-color: #5e936f;
+  color: #bdebc8;
+}
+
+.connection-badge.mock {
+  border-color: #746336;
+  color: #e8d285;
+}
+
+.connection-badge.offline {
+  border-color: #81524f;
+  color: #e2a098;
+}
+
+.connection-badge.pending {
+  color: #cfc7b8;
+}
+
+.connection-error {
+  margin: 0;
+  border-top: 1px solid #35332f;
+  padding: 10px 14px 12px;
+  color: #c9bda7;
+  font-size: 0.78rem;
 }
 
 .compact-panel {
@@ -316,6 +399,39 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.transcript-panel {
+  overflow: hidden;
+}
+
+.transcript-list {
+  display: grid;
+}
+
+.transcript-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1fr);
+  gap: 12px;
+  border-bottom: 1px solid #35332f;
+  padding: 10px 14px;
+  color: #d8d1c4;
+  font-size: 0.82rem;
+}
+
+.transcript-row:last-child {
+  border-bottom: 0;
+}
+
+.transcript-row span {
+  color: #aaa295;
+}
+
+.transcript-row strong {
+  min-width: 0;
+  color: #f6f0e3;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
 .leaderboard-panel {
   overflow: hidden;
 }
@@ -383,6 +499,7 @@ textarea {
   }
 
   .metric-grid,
+  .badge-grid,
   .status-grid {
     grid-template-columns: 1fr;
   }
@@ -394,5 +511,10 @@ textarea {
 
   .swarm-svg {
     height: 420px;
+  }
+
+  .transcript-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 }

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from hivemind_api import create_app
@@ -68,3 +70,23 @@ def test_health_is_local_mock() -> None:
 
     assert response.status_code == 200
     assert response.json()["mode"] == "local-mock"
+
+
+def test_default_app_wires_seed_replay_and_transcript_output(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[3]
+    client = TestClient(
+        create_app(
+            seed_snapshot_dir=root / "data" / "snapshots",
+            transcript_root=tmp_path / "runs",
+        )
+    )
+
+    response = client.post("/scenario", json=_scenario_payload("seeded-api-shock"))
+
+    assert response.status_code == 200
+    snapshot = response.json()["snapshot"]
+    assert snapshot["run_mode"] == "mock"
+    assert snapshot["transcript"]["axl_message_count"] == 2
+    assert snapshot["proof"]["zero_g_storage"]["readback"]["ok"] is True
+    assert snapshot["proof"]["uniswap"]["quote"]["quoteId"] == "mock-quote-alpha-001"
+    assert Path(snapshot["transcript"]["path"]).exists()

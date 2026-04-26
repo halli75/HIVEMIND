@@ -7,18 +7,32 @@ from .models import (
     AgentState,
     IntegrationEnvelope,
     LeaderboardEntry,
+    RunMode,
     Scenario,
     SwarmSnapshot,
     TierMetric,
+)
+from .providers import (
+    ExecutionProvider,
+    InferenceProvider,
+    MessageBus,
+    SeedReplay,
+    StorageProvider,
 )
 
 __all__ = [
     "AgentArchetype",
     "AgentState",
     "DEFAULT_ARCHETYPES",
+    "ExecutionProvider",
+    "InferenceProvider",
     "IntegrationEnvelope",
     "LeaderboardEntry",
+    "MessageBus",
+    "RunMode",
     "Scenario",
+    "SeedReplay",
+    "StorageProvider",
     "SwarmEngine",
     "SwarmSnapshot",
     "TierMetric",

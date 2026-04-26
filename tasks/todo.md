@@ -29,3 +29,29 @@
 - GitHub repository created as `halli75/HIVEMIND`.
 - `origin/main` verified with `git ls-remote`.
 - Initial implementation scaffold verified with Python tests, web build/audit, contracts compile/test/deploy-local/audit, JSON validation, secret scan, and `git diff --check`.
+
+## Phase 1: Local Vertical Slice Hardening
+
+- [x] Inspect current SDK/API/frontend surfaces and keep integration scope to local MVD.
+- [x] Add SDK adapter boundaries for inference, storage, message bus, and execution providers.
+- [x] Add typed run mode, replayable seed snapshots, and ignored local run transcripts.
+- [x] Make `POST /scenario`, `GET /state`, `GET /leaderboard`, `GET /metrics/tiers`, and `WS /ws/state` drive the canonical app state.
+- [x] Replace the frontend's primary data source with an API/WebSocket swarm stream and keep `useMockSwarm` as offline fallback.
+- [x] Add dashboard connection badges and run transcript proof fields for AXL, 0G, iNFT, and Uniswap mock/local outputs.
+- [x] Update `.env.example`, README/docs, and this task review with the verified commands and current boundaries.
+- [x] Verify Python SDK/API tests.
+- [x] Verify web build and audit.
+- [x] Smoke test API health, scenario injection, and WebSocket snapshot emission.
+- [x] Smoke test dashboard against API-backed data.
+- [x] Commit and push as `feat: wire dashboard to api swarm stream`.
+
+## Phase 1 Review
+
+- Added provider interfaces and local replay providers in `hivemind-sdk`.
+- API now defaults to seed replay, writes ignored local transcripts under `runs/`, exposes CORS for local Vite, and keeps REST/WebSocket state canonical.
+- Dashboard now uses `useSwarmStream` against the API/WebSocket source, falls back to `useMockSwarm`, renders 100+ visual agents from backend snapshots, and shows transcript/proof fields.
+- Verified `C:\Python313\python.exe -m pytest packages/hivemind-sdk/tests apps/api/tests -q`: 7 passed.
+- Verified `apps/web` build and audit: build passed, 0 moderate vulnerabilities.
+- Verified API process smoke: `/health`, `POST /scenario`, `/state`, and `WS /ws/state` emitted expected snapshots with transcript output.
+- Verified dashboard browser smoke against local API and Vite: API connected, AXL replay, 0G replay, 250 visual agents, iNFT placeholder, and seeded Uniswap quote rendered.
+- Verified contracts compile, test, deploy-local, and audit.

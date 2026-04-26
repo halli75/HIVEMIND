@@ -4,6 +4,16 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 Action = Literal["buy", "sell", "hold", "provide_liquidity", "hedge"]
+RunMode = Literal[
+    "mock",
+    "local_axl",
+    "live_0g",
+    "live_uniswap",
+    "local_axl+live_0g",
+    "local_axl+live_uniswap",
+    "live_0g+live_uniswap",
+    "local_axl+live_0g+live_uniswap",
+]
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -139,21 +149,27 @@ class IntegrationEnvelope:
 @dataclass(frozen=True)
 class SwarmSnapshot:
     sequence: int
+    run_mode: RunMode
     scenario: Scenario
     agents: tuple[AgentState, ...]
     tier_metrics: tuple[TierMetric, ...]
     leaderboard: tuple[LeaderboardEntry, ...]
     integrations: IntegrationEnvelope
+    transcript: dict[str, Any] = field(default_factory=dict)
+    proof: dict[str, Any] = field(default_factory=dict)
     event_log: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "sequence": self.sequence,
+            "run_mode": self.run_mode,
             "scenario": self.scenario.to_dict(),
             "agents": [agent.to_dict() for agent in self.agents],
             "tier_metrics": [metric.to_dict() for metric in self.tier_metrics],
             "leaderboard": [entry.to_dict() for entry in self.leaderboard],
             "integrations": self.integrations.to_dict(),
+            "transcript": self.transcript,
+            "proof": self.proof,
             "event_log": list(self.event_log),
         }
 

@@ -8,3 +8,5 @@ These JSON files are deterministic local snapshots for simulation, tests, and UI
 - `snapshots/uniswap-quote.seed.json`: mock Sepolia quote shape for the Uniswap API integration path.
 
 Use these seeds until the live workers replace individual records with verified run artifacts.
+
+The API loads these files during local rehearsals and combines them with each `POST /scenario` result. Generated run transcripts belong in the ignored `runs/` directory, not under `data/snapshots`, unless a transcript is intentionally promoted to a curated evidence artifact.

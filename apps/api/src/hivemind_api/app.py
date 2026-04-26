@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from hivemind_sdk import Scenario, SwarmEngine
@@ -55,9 +57,40 @@ def _snapshot_event(engine: SwarmEngine) -> dict[str, Any]:
     return {"type": "snapshot", "snapshot": engine.latest_snapshot.to_dict()}
 
 
-def create_app(*, engine: SwarmEngine | None = None) -> FastAPI:
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[4]
+
+
+def _default_engine(
+    *,
+    seed_snapshot_dir: str | Path | None = None,
+    transcript_root: str | Path | None = None,
+) -> SwarmEngine:
+    root = _repo_root()
+    return SwarmEngine(
+        seed_snapshot_dir=seed_snapshot_dir or root / "data" / "snapshots",
+        transcript_root=transcript_root or root / "runs",
+    )
+
+
+def create_app(
+    *,
+    engine: SwarmEngine | None = None,
+    seed_snapshot_dir: str | Path | None = None,
+    transcript_root: str | Path | None = None,
+) -> FastAPI:
     app = FastAPI(title="HIVEMIND API", version="0.1.0")
-    app.state.engine = engine or SwarmEngine()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.state.engine = engine or _default_engine(
+        seed_snapshot_dir=seed_snapshot_dir,
+        transcript_root=transcript_root,
+    )
     app.state.websocket_hub = WebSocketHub()
 
     @app.get("/health")
@@ -65,6 +98,7 @@ def create_app(*, engine: SwarmEngine | None = None) -> FastAPI:
         return {
             "ok": True,
             "mode": "local-mock",
+            "run_mode": app.state.engine.run_mode,
             "sequence": app.state.engine.latest_snapshot.sequence,
         }
 

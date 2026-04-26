@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react";
-import type { AgentStatus, AgentTier, LeaderboardEntry, SwarmAgent, SwarmMetrics } from "./types";
-import { useMockSwarm } from "./useMockSwarm";
+import type {
+  AgentStatus,
+  AgentTier,
+  ConnectionBadge,
+  LeaderboardEntry,
+  RunTranscript,
+  SwarmAgent,
+  SwarmMetrics,
+} from "./types";
+import { useSwarmStream } from "./useSwarmStream";
 
 const tierLabels: Record<AgentTier, string> = {
   T1: "Tier 1 / 0G active",
@@ -18,13 +26,19 @@ const statusLabels: Record<AgentStatus, string> = {
 function ScenarioPanel({
   scenario,
   onScenarioChange,
+  onRunScenario,
   agentCount,
   onAgentCountChange,
+  isRunningScenario,
+  mode,
 }: {
   scenario: string;
   onScenarioChange: (value: string) => void;
+  onRunScenario: () => void;
   agentCount: number;
   onAgentCountChange: (value: number) => void;
+  isRunningScenario: boolean;
+  mode: "api" | "mock";
 }) {
   return (
     <section className="panel scenario-panel" aria-labelledby="scenario-heading">
@@ -33,7 +47,7 @@ function ScenarioPanel({
           <p className="eyebrow">Scenario injection</p>
           <h2 id="scenario-heading">Market shock prompt</h2>
         </div>
-        <span className="connection-pill">Mock stream / WS-ready</span>
+        <span className={`connection-pill ${mode}`}>{mode === "api" ? "POST /scenario ready" : "Mock fallback"}</span>
       </div>
       <textarea
         value={scenario}
@@ -54,11 +68,37 @@ function ScenarioPanel({
         />
         <strong>{agentCount}</strong>
       </div>
+      <div className="run-row">
+        <button type="button" onClick={onRunScenario} disabled={isRunningScenario}>
+          {isRunningScenario ? "Running..." : "Run Scenario"}
+        </button>
+      </div>
     </section>
   );
 }
 
-function MetricPanel({ metrics }: { metrics: SwarmMetrics }) {
+function ConnectionBadges({ badges, error }: { badges: ConnectionBadge[]; error: string | null }) {
+  return (
+    <section className="panel badges-panel" aria-labelledby="badges-heading">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Connections</p>
+          <h2 id="badges-heading">Runtime sources</h2>
+        </div>
+      </div>
+      <div className="badge-grid">
+        {badges.map((badge) => (
+          <span className={`connection-badge ${badge.tone}`} key={badge.label}>
+            {badge.label}
+          </span>
+        ))}
+      </div>
+      {error ? <p className="connection-error">{error}</p> : null}
+    </section>
+  );
+}
+
+function MetricPanel({ metrics, mode }: { metrics: SwarmMetrics; mode: "api" | "mock" }) {
   const items = [
     ["AXL messages", metrics.axlMessages.toLocaleString()],
     ["0G inference calls", metrics.zeroGInferenceCalls.toLocaleString()],
@@ -72,12 +112,44 @@ function MetricPanel({ metrics }: { metrics: SwarmMetrics }) {
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Runtime telemetry</p>
-          <h2 id="metrics-heading">Demo counters</h2>
+          <h2 id="metrics-heading">{mode === "api" ? "Backend counters" : "Demo counters"}</h2>
         </div>
       </div>
       <div className="metric-grid">
         {items.map(([label, value]) => (
           <div className="metric" key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TranscriptPanel({ transcript }: { transcript: RunTranscript }) {
+  const rows = [
+    ["Latest scenario", transcript.latestScenario],
+    ["Latest AXL messages", transcript.axlMessageCount.toLocaleString()],
+    ["Latest 0G storage URI", transcript.zeroGStorageUri],
+    ["Latest 0G hash", transcript.zeroGStorageHash],
+    ["Latest iNFT token", transcript.inftToken],
+    ["Latest iNFT local address", transcript.inftAddress],
+    ["Latest Uniswap quote", transcript.uniswapQuote],
+    ["Latest Uniswap swap receipt", transcript.uniswapSwapReceipt],
+  ];
+
+  return (
+    <section className="panel transcript-panel" aria-labelledby="transcript-heading">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Run transcript</p>
+          <h2 id="transcript-heading">Proof fields</h2>
+        </div>
+      </div>
+      <div className="transcript-list">
+        {rows.map(([label, value]) => (
+          <div className="transcript-row" key={label}>
             <span>{label}</span>
             <strong>{value}</strong>
           </div>
@@ -224,7 +296,8 @@ export function App() {
     "ETH volatility spikes 6%, USDC liquidity thins on Sepolia, and gas rises for three blocks. Re-rank agents for a conservative swap.",
   );
   const [agentCount, setAgentCount] = useState(250);
-  const { agents, metrics, leaderboard, tick } = useMockSwarm(agentCount, scenario);
+  const { agents, metrics, leaderboard, tick, mode, badges, transcript, isRunningScenario, error, runScenario } =
+    useSwarmStream(agentCount, scenario);
 
   return (
     <main className="app-shell">
@@ -234,8 +307,8 @@ export function App() {
           <h1>DeFi swarm operations</h1>
         </div>
         <div className="topbar-status">
-          <span className="live-dot" />
-          Ready for FastAPI WebSocket
+          <span className={`live-dot ${mode}`} />
+          {mode === "api" ? "API WebSocket connected" : "Mock fallback active"}
         </div>
       </header>
 
@@ -243,15 +316,20 @@ export function App() {
         <div className="left-stack">
           <ScenarioPanel
             agentCount={agentCount}
+            isRunningScenario={isRunningScenario}
+            mode={mode}
             onAgentCountChange={setAgentCount}
+            onRunScenario={() => void runScenario(scenario)}
             onScenarioChange={setScenario}
             scenario={scenario}
           />
+          <ConnectionBadges badges={badges} error={error} />
           <TierStatusPanel agents={agents} />
         </div>
         <SwarmGraph agents={agents} tick={tick} />
         <div className="right-stack">
-          <MetricPanel metrics={metrics} />
+          <MetricPanel metrics={metrics} mode={mode} />
+          <TranscriptPanel transcript={transcript} />
           <Leaderboard entries={leaderboard} />
         </div>
       </div>
