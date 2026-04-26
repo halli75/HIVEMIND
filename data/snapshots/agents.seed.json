@@ -1,0 +1,62 @@
+{
+  "schema": "hivemind.agents.snapshot.v0",
+  "generatedFor": "local-simulation",
+  "scenario": {
+    "id": "sepolia-volatility-open-001",
+    "description": "ETH testnet volatility spike with mock USDC liquidity.",
+    "timestamp": "2026-04-26T21:00:00Z"
+  },
+  "agents": [
+    {
+      "id": "agent-alpha",
+      "archetype": "momentum-scalper",
+      "tier": 1,
+      "status": "winner",
+      "aiq": 9120,
+      "riskScore": 0.22,
+      "strategyDigest": "sha256:strategy-alpha-v0",
+      "storageUri": "0g://storage/hivemind/snapshots/agent-alpha.json",
+      "storageHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "preferredSwap": {
+        "chain": "sepolia",
+        "tokenIn": "ETH",
+        "tokenOut": "USDC",
+        "amountInWei": "10000000000000000"
+      }
+    },
+    {
+      "id": "agent-beta",
+      "archetype": "mean-reversion",
+      "tier": 2,
+      "status": "candidate",
+      "aiq": 7810,
+      "riskScore": 0.37,
+      "strategyDigest": "sha256:strategy-beta-v0",
+      "storageUri": "0g://storage/hivemind/snapshots/agent-beta.json",
+      "storageHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "preferredSwap": {
+        "chain": "sepolia",
+        "tokenIn": "ETH",
+        "tokenOut": "USDC",
+        "amountInWei": "5000000000000000"
+      }
+    },
+    {
+      "id": "agent-gamma",
+      "archetype": "risk-off-hedger",
+      "tier": 3,
+      "status": "fallback",
+      "aiq": 6340,
+      "riskScore": 0.14,
+      "strategyDigest": "sha256:strategy-gamma-v0",
+      "storageUri": "0g://storage/hivemind/snapshots/agent-gamma.json",
+      "storageHash": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "preferredSwap": {
+        "chain": "sepolia",
+        "tokenIn": "ETH",
+        "tokenOut": "USDC",
+        "amountInWei": "2500000000000000"
+      }
+    }
+  ]
+}

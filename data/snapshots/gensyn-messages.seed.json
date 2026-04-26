@@ -1,0 +1,43 @@
+{
+  "schema": "hivemind.gensyn.messages.v0",
+  "transport": "mock-axl-local",
+  "nodes": [
+    {
+      "nodeId": "axl-node-a",
+      "role": "scenario-broadcaster",
+      "processHint": "node-a"
+    },
+    {
+      "nodeId": "axl-node-b",
+      "role": "strategy-evaluator",
+      "processHint": "node-b"
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg-001",
+      "type": "ScenarioInjected",
+      "from": "axl-node-a",
+      "to": "broadcast",
+      "timestamp": "2026-04-26T21:00:01Z",
+      "payload": {
+        "scenarioId": "sepolia-volatility-open-001",
+        "volatilityBps": 420,
+        "liquidityShock": "moderate"
+      }
+    },
+    {
+      "id": "msg-002",
+      "type": "StrategyScoreSubmitted",
+      "from": "axl-node-b",
+      "to": "axl-node-a",
+      "timestamp": "2026-04-26T21:00:08Z",
+      "payload": {
+        "agentId": "agent-alpha",
+        "aiq": 9120,
+        "confidence": 0.83,
+        "reason": "High fill probability with bounded testnet exposure."
+      }
+    }
+  ]
+}

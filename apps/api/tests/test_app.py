@@ -1,0 +1,70 @@
+from fastapi.testclient import TestClient
+
+from hivemind_api import create_app
+from hivemind_sdk import SwarmEngine
+
+
+def _client() -> TestClient:
+    app = create_app(engine=SwarmEngine(agent_count=8, seed="api-test"))
+    return TestClient(app)
+
+
+def _scenario_payload(scenario_id: str = "macro-shock") -> dict[str, object]:
+    return {
+        "scenario_id": scenario_id,
+        "label": "Macro shock",
+        "volatility": 0.77,
+        "liquidity_delta": -0.35,
+        "sentiment": -0.48,
+        "gas_pressure": 0.42,
+        "signal_strength": 0.8,
+    }
+
+
+def test_rest_scenario_updates_state_leaderboard_and_tier_metrics() -> None:
+    client = _client()
+
+    response = client.post("/scenario", json=_scenario_payload())
+
+    assert response.status_code == 200
+    event = response.json()
+    snapshot = event["snapshot"]
+    assert event["type"] == "snapshot"
+    assert snapshot["scenario"]["scenario_id"] == "macro-shock"
+    assert len(snapshot["agents"]) == 8
+    assert snapshot["integrations"]["zero_g_compute"]["mode"] == "mock"
+
+    leaderboard = client.get("/leaderboard").json()
+    assert leaderboard["sequence"] == snapshot["sequence"]
+    assert leaderboard["leaderboard"][0]["rank"] == 1
+
+    metrics = client.get("/metrics/tiers").json()
+    assert sum(metric["inference_calls"] for metric in metrics["tier_metrics"]) == 8
+
+
+def test_websocket_streams_initial_state_and_accepts_scenario_injection() -> None:
+    client = _client()
+
+    with client.websocket_connect("/ws/state") as websocket:
+        initial = websocket.receive_json()
+        assert initial["type"] == "snapshot"
+        assert initial["snapshot"]["scenario"]["scenario_id"] == "bootstrap-neutral"
+
+        websocket.send_json(
+            {
+                "type": "inject_scenario",
+                "scenario": _scenario_payload("ws-shock"),
+            }
+        )
+        event = websocket.receive_json()
+
+    assert event["type"] == "snapshot"
+    assert event["snapshot"]["scenario"]["scenario_id"] == "ws-shock"
+    assert event["snapshot"]["integrations"]["gensyn_axl"]["mode"] == "mock"
+
+
+def test_health_is_local_mock() -> None:
+    response = _client().get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "local-mock"

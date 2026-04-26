@@ -1,0 +1,23 @@
+{
+  "name": "@hivemind/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hardhat scaffold for HIVEMIND iNFT contracts on 0G Galileo testnet.",
+  "scripts": {
+    "clean": "hardhat clean",
+    "compile": "hardhat compile",
+    "test": "hardhat compile && node --import tsx --test \"test/**/*.spec.ts\"",
+    "deploy:local": "hardhat run scripts/deploy-inft.ts --network hardhat",
+    "deploy:0g:galileo": "hardhat run scripts/deploy-inft.ts --network zerogGalileo"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^4.0.9",
+    "@types/node": "^22.10.2",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.14.0",
+    "hardhat": "^3.4.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.6.3"
+  },
+  "type": "module"
+}

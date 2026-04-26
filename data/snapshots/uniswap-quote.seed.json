@@ -1,0 +1,28 @@
+{
+  "schema": "hivemind.uniswap.quote.v0",
+  "mode": "mock-sepolia",
+  "request": {
+    "endpoint": "/v1/quote",
+    "type": "EXACT_INPUT",
+    "tokenIn": "ETH",
+    "tokenOut": "USDC",
+    "tokenInChainId": 11155111,
+    "tokenOutChainId": 11155111,
+    "amount": "10000000000000000",
+    "swapper": "0x000000000000000000000000000000000000dEaD",
+    "protocols": ["V3"]
+  },
+  "response": {
+    "quoteId": "mock-quote-alpha-001",
+    "amountOut": "32150000",
+    "amountOutDecimals": "32.15",
+    "priceImpactBps": 18,
+    "route": ["ETH", "USDC"],
+    "approvalRequired": false,
+    "swapTransaction": {
+      "to": "0x0000000000000000000000000000000000000000",
+      "data": "0x",
+      "value": "10000000000000000"
+    }
+  }
+}

@@ -68,6 +68,7 @@ Cut entirely unless explicitly re-approved:
 
 ## Engineering Defaults
 
+- For heavy tasks, the lead agent should act as project manager: split work into disjoint engineering slices, delegate implementation to subagents, keep integration/verification in the main thread, and avoid duplicate work across agents.
 - Build smallest working vertical slice before adding breadth.
 - Prefer real integrations over mock-only demos, but keep mock fallbacks for development and demo resilience.
 - Avoid claims the implementation cannot prove in the demo or README.
@@ -105,4 +106,3 @@ For core milestones, verify with one or more of:
   3. winner selected,
   4. iNFT minted,
   5. Uniswap trade executed.
-

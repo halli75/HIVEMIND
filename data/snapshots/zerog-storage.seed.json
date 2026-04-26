@@ -1,0 +1,25 @@
+{
+  "schema": "hivemind.0g.storage.snapshot.v0",
+  "network": {
+    "name": "0G-Galileo-Testnet",
+    "chainId": 16602,
+    "explorer": "https://chainscan-galileo.0g.ai",
+    "storageExplorer": "https://storagescan-galileo.0g.ai"
+  },
+  "objects": [
+    {
+      "objectId": "agent-alpha-intelligence-v0",
+      "uri": "0g://storage/hivemind/snapshots/agent-alpha.json",
+      "contentHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "mimeType": "application/json",
+      "purpose": "Winning agent memory and strategy digest for iNFT mint."
+    },
+    {
+      "objectId": "swarm-run-log-001",
+      "uri": "0g://storage/hivemind/runs/sepolia-volatility-open-001.log.json",
+      "contentHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "mimeType": "application/json",
+      "purpose": "Simulation telemetry and AXL message transcript."
+    }
+  ]
+}
