@@ -1,108 +1,46 @@
-# HIVEMIND Agent Instructions
+# Repository Guidelines
 
-## Project Context
+## Project Structure & Module Organization
 
-HIVEMIND is an ETHGlobal OpenAgents hackathon project.
+HIVEMIND is a local-first ETHGlobal OpenAgents prototype. The Python SDK lives in `packages/hivemind-sdk/src/hivemind_sdk`, with tests in `packages/hivemind-sdk/tests`. The FastAPI service is in `apps/api/src/hivemind_api` and tests are in `apps/api/tests`. The local cross-process AXL runner is in `apps/axl-node`. The React/Vite dashboard is in `apps/web/src`. Solidity contracts, Hardhat config, deployment scripts, and contract tests live under `contracts/`. Seed snapshots are in `data/snapshots`, integration notes are in `docs/`, and active task notes are in `tasks/`.
 
-Core thesis: simulate a DeFi market with a swarm of AI agents on 0G, rank the strongest strategies, crystallize winners into iNFT-backed agents, and execute real Sepolia trades through the Uniswap API. Gensyn AXL is the communication layer between real separate node processes.
+## Build, Test, and Development Commands
 
-## Prize Strategy
+Use Windows PowerShell examples unless your shell differs.
 
-Target exactly three partner selections:
+```powershell
+$env:PYTHONPATH='packages/hivemind-sdk/src;apps/api/src;apps/axl-node/src'
+C:\Python313\python.exe -m pytest packages/hivemind-sdk/tests apps/api/tests apps/axl-node/tests -q
+```
 
-1. 0G
-   - Best Autonomous Agents, Swarms & iNFT Innovations
-   - Best Agent Framework, Tooling & Core Extensions
-2. Gensyn AXL
-   - Best Application of Agent eXchange Layer
-3. Uniswap Foundation
-   - Best Uniswap API Integration
+Runs SDK, API, and AXL tests.
 
-Do not let non-target integrations consume critical-path time.
+```powershell
+$env:PYTHONPATH='packages/hivemind-sdk/src;apps/axl-node/src'
+C:\Python313\python.exe -m hivemind_axl_node smoke --messages 20 --transcript runs/axl/smoke.jsonl
+```
 
-## Critical Path
+Starts two local AXL node processes and writes ignored transcript evidence.
 
-Every core build decision should support this sentence:
+```powershell
+cd apps/web; & "$env:ProgramFiles\nodejs\npm.cmd" run build
+cd contracts; & "$env:ProgramFiles\nodejs\npm.cmd" test
+```
 
-"HIVEMIND simulates a DeFi swarm, crystallizes the winning strategy into an iNFT-backed agent, and executes a real Uniswap trade."
+Builds the dashboard and runs Hardhat contract tests.
 
-Required MVD:
+## Coding Style & Naming Conventions
 
-- 100+ visual agents in the frontend.
-- 2+ real Gensyn AXL node processes exchanging typed messages.
-- Three-tier inference architecture with visible Tier 1 metrics.
-- 0G Compute used for active inference.
-- 0G Storage used for agent state or logs.
-- Minimal iNFT minted on 0G Chain with an intelligence or memory reference visible in metadata.
-- Uniswap Sepolia quote and swap flow with transaction receipt.
-- `hivemind-sdk` quickstart with one working custom archetype.
-- `FEEDBACK.md` with real Uniswap integration notes.
-- README with setup instructions, architecture diagram, and demo narrative.
+Python uses type hints, dataclasses, protocols, and snake_case modules/functions. Keep provider boundaries in `providers.py` rather than wiring sponsor APIs directly into the engine. React/TypeScript uses PascalCase components, camelCase variables, and explicit shared types in `apps/web/src/types.ts`. Solidity contracts use PascalCase contract names and camelCase fields. Prefer ASCII, small focused files, and clear mock/live mode labels.
 
-## Scope Rules
+## Testing Guidelines
 
-Core:
+Tests use `pytest` for Python and Node's built-in test runner through Hardhat for contracts. Add tests beside the surface changed: SDK behavior in `packages/hivemind-sdk/tests`, API behavior in `apps/api/tests`, AXL process behavior in `apps/axl-node/tests`, and contract behavior in `contracts/test/*.spec.ts`. Keep smoke artifacts under ignored `runs/`.
 
-- 0G Compute, Storage, Chain, and iNFT proof.
-- Gensyn AXL with real separate node processes.
-- Uniswap API quote, price impact display, and one Sepolia swap.
-- Tiered inference, heuristic fallback, scoring, scenario injection, and dashboard metrics.
-- Python SDK surface only as far as needed for the 0G framework track.
+## Commit & Pull Request Guidelines
 
-Stretch only:
+Follow the existing history style: Conventional Commits such as `feat(axl): add cross-process message runner` or `docs(gensyn): record live swarm setup gate`. PRs should include a short summary, verification commands/results, affected modules, screenshots for dashboard changes, and explicit notes for mock vs live sponsor behavior.
 
-- ENS identity.
-- KeeperHub relay.
-- Breeding contract.
-- Marketplace.
-- LP position management.
-- Live GraphRAG from external APIs.
-- 1,000+ real agent execution.
+## Security & Configuration Tips
 
-Cut entirely unless explicitly re-approved:
-
-- ENS CCIP-Read gateways.
-- HA resolver infrastructure.
-- x402 / MPP.
-- Any autonomous mainnet execution.
-
-## Engineering Defaults
-
-- For heavy tasks, the lead agent should act as project manager: split work into disjoint engineering slices, delegate implementation to subagents, keep integration/verification in the main thread, and avoid duplicate work across agents.
-- Build smallest working vertical slice before adding breadth.
-- Prefer real integrations over mock-only demos, but keep mock fallbacks for development and demo resilience.
-- Avoid claims the implementation cannot prove in the demo or README.
-- Use clear metrics panels to make hidden infrastructure visible: AXL messages, 0G inference calls, AIQ size, fallback count, and latest swap receipt.
-- Keep sponsor artifacts current as work happens, not at the end.
-
-## Verification Requirements
-
-Do not mark work complete without proof.
-
-For core milestones, verify with one or more of:
-
-- Passing unit or integration tests.
-- Local demo run.
-- Explorer link or transaction hash.
-- AXL node logs showing cross-process messages.
-- 0G Storage readback.
-- Screenshot or recording for visual demo work.
-- README command run from a clean environment where practical.
-
-## Task Management
-
-- Maintain `tasks/todo.md` for active project tasks.
-- Maintain `tasks/lessons.md` for corrections and lessons learned.
-- After any user correction, add a concise lesson that prevents repeat mistakes.
-- If an approach starts failing repeatedly, stop and re-plan before continuing.
-
-## Demo Constraints
-
-- Demo video target: 2:55, hard maximum 3:00 for 0G.
-- The scenario-injection swarm scene should be pre-recorded from a real run.
-- The final story should be legible without deep DeFi expertise:
-  1. scenario injected,
-  2. swarm reacts,
-  3. winner selected,
-  4. iNFT minted,
-  5. Uniswap trade executed.
+Copy `.env.example` to `.env` locally and never commit secrets, private keys, `HF_TOKEN`, or generated `swarm.pem`. Live integrations must remain opt-in. Do not claim live 0G, Gensyn, or Uniswap success unless logs, readbacks, or transaction evidence prove it.

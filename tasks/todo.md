@@ -90,3 +90,22 @@
 - [x] Run official setup far enough to reach browser login, HF token, Docker, or current-network availability gate.
 - [x] Capture non-secret evidence and update `docs/integrations/gensyn.md`.
 - [x] Verify no secrets were committed and push documentation if changed.
+
+## Phase 2 Live Gensyn Recovery
+
+- [x] Snapshot current RL Swarm clone state and avoid committing external secrets or generated identity files.
+- [x] Run isolated baseline, official dependency, SSR/account-kit, and script-path attempts in external WSL workspaces.
+- [x] Capture non-secret logs for each patch variant, including modal login status and `swarm.pem` presence.
+- [x] Continue the first successful login path until peer/testnet participation, official swarm-unavailable state, or a new concrete blocker.
+- [x] Update Gensyn docs and this review with verified evidence.
+- [ ] Verify no tracked secrets, no repo regressions, and no stale containers required for the demo path.
+
+## Phase 2 Live Gensyn Recovery Review
+
+- Baseline upstream RL Swarm commit `9c95410` still reproduces the modal-login `hasHydrated` HTTP 500 after a successful install/build.
+- A one-line Account Kit `cookieStorage` patch preserves SSR, builds, and serves the modal at HTTP 200 on port 3103; this is now the preferred full-container promotion patch.
+- A minimal Next 14 client-mount patch builds and serves the modal at HTTP 200 on port 3105.
+- A larger official-dependency compatibility patch also serves HTTP 200 on port 3102 after Next 16, viem, webpack-build, Account Kit resolution, and async headers fixes.
+- The non-Docker script path reaches the Ethereum Server Wallet login setup text but stalls in bounded Yarn dependency installation before serving the modal.
+- Full CPU container promotion remains blocked: workspace mount permissions first killed the container, and the root-run retry destabilized WSL/Docker before a login page or `swarm.pem` could be verified.
+- No live peer/testnet registration was proven; no `swarm.pem` contents were read or committed.

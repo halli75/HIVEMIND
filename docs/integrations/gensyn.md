@@ -134,6 +134,31 @@ Current blocker:
 
 - RL Swarm's current upstream Docker/login path is not demo-stable in this environment without additional upstream troubleshooting. The local AXL runner remains the verified Gensyn proof path for Phase 2.
 
+Recovery attempt date: 2026-04-26.
+
+Patch matrix evidence:
+
+- Baseline upstream `9c95410` was retested in `/root/hivemind-live/gensyn/matrix-baseline` with isolated Node `v20.18.0` and Yarn `1.22.22`.
+- Baseline `modal-login` installed and built, but `PORT=3101 yarn start` returned HTTP 500 and reproduced `TypeError: Cannot read properties of undefined (reading 'hasHydrated')`.
+- The installed baseline lock already resolved `viem@2.30.5`, so the issue was not just a stale `viem <2.25.0`.
+- A minimal client-mount patch in `/root/hivemind-live/gensyn/matrix-client-only` disabled Account Kit SSR, removed `cookieToInitialState` from `RootLayout`, and rendered `AlchemyAccountProvider` only after browser mount.
+- The minimal patch built successfully with Next `14.2.35` and served `http://127.0.0.1:3105/` with HTTP 200. Evidence logs: `client-mounted-build.log`, `client-mounted-http-3105.probe`, and `client-mounted.diff`.
+- A smaller SSR-preserving patch in `/root/hivemind-live/gensyn/matrix-cookie-storage` only enabled Account Kit `cookieStorage`; it built successfully and served `http://127.0.0.1:3103/` with HTTP 200. This is now the preferred full-container promotion patch because it preserves server-rendered behavior with a one-line source change.
+- A no-SSR variant in `/root/hivemind-live/gensyn/matrix-no-ssr` also served `http://127.0.0.1:3104/` with HTTP 200 after deferring the provider until hydration, but it is broader than the cookie-storage fix.
+- A separate official-dependency variant in `/root/hivemind-live/gensyn/matrix-official-login` also served HTTP 200 on port 3102 after upgrading `next` to `16.2.4`, `viem` to `2.48.4`, adding compatibility resolutions, using `next build --webpack`, enabling `cookieStorage`, and updating `RootLayout` for async `headers()`.
+- The plain `next@latest viem@latest` path was not enough by itself: Next 16's default Turbopack build failed on packaged non-code files from the dependency tree before the compatibility fixes.
+- The non-Docker script path reached `Please login to create an Ethereum Server Wallet`, but bounded `yarn install` attempts stalled before serving `localhost:3000`.
+- A full CPU container promotion with the minimal patch and `setuptools<81` build constraint was attempted from `/root/hivemind-live/gensyn/matrix-client-only`.
+- Mounting the patched workspace into the existing CPU image first failed because the non-root container user could not write `sed` temp files into `modal-login`.
+- Running the mounted CPU container as root got past that permission failure and left a container running, but `localhost:3000` reset connections and WSL stopped responding during log inspection. Ubuntu had to be terminated, after which Docker Desktop was again disconnected from the WSL socket.
+- No `user/keys/swarm.pem` was generated and no peer/testnet registration was proven.
+
+Current blocker after recovery:
+
+- The modal-login `hasHydrated` blocker is fixed by two independent patch variants, but full RL Swarm container promotion is blocked by Docker/WSL runtime instability and resource pressure during CPU container startup/log inspection.
+- Before retrying full container promotion, restart Docker Desktop, verify `docker info` from WSL, keep the CPU-only path, and avoid GPU until `nvidia-smi` works in WSL.
+- Prefer the one-line `cookieStorage` patch for the next full-container retry because it preserves SSR and has the smallest blast radius. Keep the Next 14 client-mount patch as fallback if the full container still hits `hasHydrated`.
+
 ## Integration Steps
 
 1. Start two independent processes.
