@@ -132,3 +132,24 @@
 - Browser login completed, API key activation succeeded, and `swarm.pem` was generated in the ignored external workspace without reading or committing key contents.
 - RL Swarm logged `Connected to Gensyn Testnet`.
 - Final blocker moved to P2P bootstrap: all emitted bootnode ports on `38.101.215.15` failed from Windows, WSL, and container checks, and the runner exited with `failed to connect to bootstrap peers`.
+
+## Phase 2 Live Gensyn Bootnode Reachability
+
+- [x] Reconfirm Windows, WSL, and Docker baseline state before retrying RL Swarm.
+- [x] Check current official Gensyn RL Swarm docs and known bootstrap-peer reports.
+- [x] Run a Docker-isolated TCP probe against `38.101.215.15:30021-30023`.
+- [x] Capture traceroute/tracert evidence for the emitted bootnode IP.
+- [x] Audit local firewall/VPN/network state without changing security settings.
+- [x] Use an alternate egress path, preferably a cloud VM, to distinguish local blocking from upstream bootnode unavailability.
+- [x] Decide whether to rerun patched CPU RL Swarm based on raw TCP reachability.
+- [x] Update Gensyn docs, verify no tracked secrets/regressions, and commit the diagnosis.
+
+## Phase 2 Live Gensyn Bootnode Reachability Review
+
+- Windows, WSL, and Docker all retained normal public egress controls, including successful checks to `1.1.1.1:443`.
+- Windows, WSL, Docker, and an independent AWS `us-east-2` probe all failed to reach `38.101.215.15:30021-30023`.
+- Windows and WSL route probes left the local network and failed at or after `38.104.98.199`; AWS traceroute reached the same network and then no longer progressed.
+- The temporary AWS probe instance and security group were terminated and deleted after evidence capture.
+- Official Gensyn docs currently label RL Swarm as deprecated and state there are no official swarms running right now.
+- The patched CPU RL Swarm path was not rerun because raw TCP reachability failed from every tested egress path; rerunning would only reproduce the same bootstrap failure.
+- Current root cause classification: upstream Gensyn bootnode availability/routing/filtering or no active official swarm, not a local Docker/WSL/login/identity problem.

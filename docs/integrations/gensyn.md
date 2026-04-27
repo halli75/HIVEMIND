@@ -180,6 +180,30 @@ Current blocker after container promotion:
 - Container socket checks timed out for all three ports.
 - This is now a Gensyn bootnode/network reachability blocker, not a modal-login, Docker build, browser login, or local identity blocker.
 
+Bootnode reachability diagnosis date: 2026-04-27.
+
+Additional evidence:
+
+- Windows and WSL control egress remained healthy: both could reach unrelated public endpoints such as `1.1.1.1:443`.
+- Windows `tracert -d 38.101.215.15` left the local network, reached `64.125.26.13`, then `38.104.98.199`, and ended with `38.104.98.199 reports: Destination host unreachable`.
+- WSL `tracepath` followed the same route family and ended at `38.104.98.199 !H`.
+- A Docker-isolated BusyBox TCP probe timed out to all three bootnode ports while Docker itself was healthy.
+- A temporary AWS EC2 probe in `us-east-2` also failed to connect to all three bootnode ports with `No route to host`; its traceroute reached `38.104.98.199` and then received no further response.
+- The temporary EC2 instance and security group used for the probe were terminated/deleted after evidence capture.
+
+Current conclusion:
+
+- The blocker is not local Docker, WSL, modal login, browser auth, Hugging Face credentials, or `swarm.pem`.
+- Because the same bootnodes are unreachable from the local network and an independent AWS egress point, the likely root cause is upstream Gensyn bootnode availability, routing, filtering, or the absence of an active official swarm.
+- Official Gensyn documentation currently labels RL Swarm as deprecated and states that there are no official swarms running right now. Bootstrap-peer failures are also a known historical issue pattern in the RL Swarm tracker.
+- Do not spend more time patching the local container path until Gensyn publishes reachable bootnodes, a community-owned swarm endpoint, or support confirms a replacement network path.
+
+Escalation package:
+
+- Attach the relevant non-secret section of `live-run.log` showing `Connected to Gensyn Testnet`, emitted bootnodes, and `failed to connect to bootstrap peers`.
+- Include the Windows, WSL, Docker, and AWS reachability matrix above.
+- Include system context: Windows with WSL2 Ubuntu 22.04, Docker Desktop Linux engine, CPU-only RL Swarm container, generated `swarm.pem` present but contents private.
+
 Evidence files remain outside the repo under `/root/hivemind-live/gensyn/matrix-cookie-storage/logs/hivemind-retry/`:
 
 - `build.log`
