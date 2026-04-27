@@ -224,6 +224,68 @@ Evidence files remain outside the repo under `/root/hivemind-live/gensyn/matrix-
 - `live-run.log`
 - `evidence-summary.txt`
 
+## Self-Hosted Bootstrap Resolution
+
+Since the official Gensyn bootnodes are contract-driven and permanently unreachable, a self-hosted Hivemind DHT bootnode bypasses the dead contract peers entirely.
+
+### Root Cause Summary
+
+Two code-level injection sites in RL Swarm unconditionally overwrite `initial_peers` with contract-sourced bootnodes:
+
+- `code_gen_exp/src/manager.py:43` — `SwarmGameManager.__init__` calls `coordinator.get_bootnodes()` and writes to `communication_kwargs['initial_peers']`
+- `code_gen_exp/src/proposer_service.py:73` — `ProposerService.__init__` does the same for the proposer DHT
+
+Hydra config overrides and `--initial_peers` env vars are both ineffective because these lines execute after Hydra loads config.
+
+### Fix: HIVEMIND_INITIAL_PEERS env-var check
+
+Patch both files to check a `HIVEMIND_INITIAL_PEERS` env var first and fall back to contract peers only if the env var is empty. Patches are in `patches/rl-swarm/`:
+
+- `manager.patch` — two-line change to `manager.py`; `import os` already present at line 1
+- `proposer_service.patch` — two-line change to `proposer_service.py` plus adds `import os`
+
+The patches are applied dynamically by the orchestration script to `/tmp/` temp files and volume-mounted read-only into the container. No image rebuild is needed.
+
+### Self-Hosted Bootnode
+
+`services/hivemind-bootnode/bootnode.py` starts a Hivemind DHT node using the existing `matrix-cookie-storage-swarm-cpu` image (which already contains `hivemind==1.2.0.dev0`). Key implementation detail: use `host_maddrs=["/ip4/0.0.0.0/tcp/PORT"]` — not `host=`/`port=` kwargs, which fail with `TypeError: P2P.create() got unexpected keyword argument 'host'`.
+
+### Running Self-Hosted Bootstrap
+
+```bash
+# From WSL, with Docker Desktop running:
+bash /path/to/HIVEMIND/scripts/run-gensyn-self-hosted.sh
+```
+
+The script:
+1. Creates Docker named network `swarm-boot-net`
+2. Applies env-var patches to `/tmp/` copies of `manager.py` and `proposer_service.py`
+3. Starts the bootnode container on `swarm-boot-net`, waits for its multiaddr
+4. Generates `/tmp/docker-compose.run.yml` override with `HIVEMIND_INITIAL_PEERS` and read-only volume mounts
+5. Launches swarm-cpu via `docker compose -f docker-compose.yml -f /tmp/docker-compose.run.yml up swarm-cpu`
+
+### Verified Success Log Evidence
+
+Run date: 2026-04-27.
+
+```
+[2026-04-27 21:24:51][genrl] - ✅ Connected to Gensyn Testnet
+[2026-04-27 21:24:51][genrl] - bootnodes: ['/dns4/hivemind-bootnode/tcp/30021/p2p/12D3KooWE5CGdBcNVDyDt5hM1cugSkmtr5f7ERCjAdos1dDo3nKs']
+[2026-04-27 21:24:57][genrl] - ============!!!Joining CodeZero Swarm!!!============
+[2026-04-27 21:24:57][genrl] - 🐝 Hello [jagged spotted mandrill] [QmRAFupGJwJB8mGG6eNsAbo1CQeAGQeEWqZTvALybgBetc]!
+[2026-04-27 21:24:57][genrl] - Using Model: Qwen/Qwen2.5-Coder-0.5B-Instruct
+[2026-04-27 21:25:40][genrl] - Starting round: 28239/1000000.
+Map: 100%|██████████| 1/1
+```
+
+Key confirmations:
+- `bootnodes:` shows `/dns4/hivemind-bootnode/...` — self-hosted peer, not `38.101.215.15`
+- `Joining CodeZero Swarm` — DHT bootstrap succeeded without `P2PDaemonError`
+- `Starting round: 28239` — training began; no `failed to connect to bootstrap peers`
+- Node identity: `jagged spotted mandrill` / `QmRAFupGJwJB8mGG6eNsAbo1CQeAGQeEWqZTvALybgBetc`
+
+Evidence file saved outside repo: `/tmp/swarm_success_evidence.log`
+
 ## Integration Steps
 
 1. Start two independent processes.

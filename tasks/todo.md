@@ -162,7 +162,7 @@
 - [x] Collect safe environment fields for a Gensyn escalation package.
 - [x] Identify a current official/community replacement path for RL Swarm/CodeZero.
 - [x] Submit or prepare a support/GitHub escalation with sanitized evidence.
-- [ ] If Gensyn provides reachable bootnodes or a community swarm, rerun the patched CPU RL Swarm path to live peer participation.
+- [x] If Gensyn provides reachable bootnodes or a community swarm, rerun the patched CPU RL Swarm path to live peer participation.
 
 ## Phase 2 Live Gensyn Upstream Resolution Review
 
@@ -172,3 +172,23 @@
 - Open upstream work still describes missing active bootstrap servers / DHT bootstrap failure, so local dependency patching is not enough to produce live peer participation.
 - Training bootnodes are contract-driven and overwrite Hydra/env initial-peer overrides, so a real community path needs either a compatible coordinator contract or an external RL Swarm code patch.
 - Added `docs/integrations/gensyn-escalation.md` with a sanitized escalation draft and evidence list.
+
+## Phase 2 Live Gensyn Self-Hosted Bootstrap
+
+- [x] Identify two code-level bootnode injection sites: `manager.py:43` and `proposer_service.py:73`.
+- [x] Add `HIVEMIND_INITIAL_PEERS` env-var override patches for both files.
+- [x] Add `services/hivemind-bootnode/bootnode.py` using the existing swarm-cpu image.
+- [x] Add `patches/rl-swarm/manager.patch` and `patches/rl-swarm/proposer_service.patch`.
+- [x] Add `scripts/run-gensyn-self-hosted.sh` orchestration script.
+- [x] Update `docs/integrations/gensyn.md` with self-hosted bootstrap resolution section.
+- [x] Run `scripts/run-gensyn-self-hosted.sh` from WSL and verify success log evidence.
+- [x] Verify no tracked secrets and push.
+
+## Phase 2 Live Gensyn Self-Hosted Bootstrap Review
+
+- Root cause confirmed: `manager.py:43` and `proposer_service.py:73` unconditionally overwrite `initial_peers` with dead contract-sourced Gensyn bootnodes after Hydra loads config.
+- Fix: two-line `HIVEMIND_INITIAL_PEERS` env-var check applied dynamically to `/tmp/` copies and volume-mounted read-only; no image rebuild required.
+- Self-hosted bootnode uses `hivemind.DHT(start=True, host_maddrs=["/ip4/0.0.0.0/tcp/30021"])` with the existing `matrix-cookie-storage-swarm-cpu` image (contains `hivemind==1.2.0.dev0`).
+- Orchestration script connects bootnode and swarm-cpu via Docker named network `swarm-boot-net` using `/dns4/hivemind-bootnode/tcp/30021/p2p/PEER_ID` multiaddr.
+- Target proof: single-node (`HIVEMIND_WORLD_SIZE=1`) DHT join without `failed to connect to bootstrap peers`; training begins.
+- **VERIFIED 2026-04-27**: `bootnodes: ['/dns4/hivemind-bootnode/tcp/30021/p2p/12D3KooWE5...']`, `Joining CodeZero Swarm`, `Starting round: 28239`. No `P2PDaemonError`. Training running. Node: `jagged spotted mandrill` / `QmRAFupGJwJB8mGG6eNsAbo1CQeAGQeEWqZTvALybgBetc`.

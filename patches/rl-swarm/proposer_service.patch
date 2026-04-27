@@ -1,0 +1,22 @@
+--- a/code_gen_exp/src/proposer_service.py
++++ b/code_gen_exp/src/proposer_service.py
+@@ -1,6 +1,7 @@
+ from dataclasses import dataclass
++import os
+ import logging
+ import random
+ from genrl.communication.hivemind.hivemind_backend import HivemindBackend, HivemindRendezvouz
+ from code_gen_exp.src.coordinator import ModalSwarmCoordinator
+ from code_gen_exp.src.proposer import Proposer, PPOConfig, VllmConfig, PromptUpdateConfig
+@@ -70,7 +71,9 @@
+                  ppo_config: PPOConfig,
+                  vllm_config: VllmConfig,
+                  prompt_update_config: PromptUpdateConfig,
+                  coordinator: ModalSwarmCoordinator = None):
+
+-        initial_peers = coordinator.get_bootnodes() if coordinator is not None else None
++        _env = os.environ.get("HIVEMIND_INITIAL_PEERS", "")
++        initial_peers = [p for p in _env.split(",") if p] or (coordinator.get_bootnodes() if coordinator is not None else None)
+         backend = HivemindBackend(
+             identity_path=service_config.identity_path,
+             startup_timeout=service_config.startup_timeout,
