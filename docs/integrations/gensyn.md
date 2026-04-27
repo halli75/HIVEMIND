@@ -159,6 +159,33 @@ Current blocker after recovery:
 - Before retrying full container promotion, restart Docker Desktop, verify `docker info` from WSL, keep the CPU-only path, and avoid GPU until `nvidia-smi` works in WSL.
 - Prefer the one-line `cookieStorage` patch for the next full-container retry because it preserves SSR and has the smallest blast radius. Keep the Next 14 client-mount patch as fallback if the full container still hits `hasHydrated`.
 
+Container promotion retry date: 2026-04-27.
+
+Resolved during retry:
+
+- Docker Desktop and WSL were restarted cleanly after `docker rm` hung on the stale RL Swarm container.
+- The stale RL Swarm container was removed and Docker build cache was reclaimed without deleting volumes.
+- The CPU image path was rebuilt far enough to prove the `cookieStorage` modal fix and `setuptools<81` constraint inside the image build.
+- A Docker snapshot/unpack issue left the newly named Compose image slow or unreliable to start, but the usable `rl-swarm-swarm-cpu` image contained the modal fix and started successfully.
+- The live container served `http://localhost:3000` with HTTP 200.
+- Browser login completed, the API key activated, and `user/keys/swarm.pem` was generated in the external ignored workspace. The key contents were not read or committed.
+- The runner logged `Connected to Gensyn Testnet` before starting Hivemind DHT bootstrap.
+
+Current blocker after container promotion:
+
+- Hivemind P2P bootstrap failed after testnet connection: `P2PDaemonError('Daemon failed to start: 2026/04/27 04:21:20 failed to connect to bootstrap peers')`.
+- The emitted bootnodes were `38.101.215.15:30021`, `38.101.215.15:30022`, and `38.101.215.15:30023`.
+- Windows `Test-NetConnection` failed for all three bootnode ports.
+- WSL socket checks failed with `No route to host` for all three ports.
+- Container socket checks timed out for all three ports.
+- This is now a Gensyn bootnode/network reachability blocker, not a modal-login, Docker build, browser login, or local identity blocker.
+
+Evidence files remain outside the repo under `/root/hivemind-live/gensyn/matrix-cookie-storage/logs/hivemind-retry/`:
+
+- `build.log`
+- `live-run.log`
+- `evidence-summary.txt`
+
 ## Integration Steps
 
 1. Start two independent processes.

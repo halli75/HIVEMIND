@@ -109,3 +109,26 @@
 - The non-Docker script path reaches the Ethereum Server Wallet login setup text but stalls in bounded Yarn dependency installation before serving the modal.
 - Full CPU container promotion remains blocked: workspace mount permissions first killed the container, and the root-run retry destabilized WSL/Docker before a login page or `swarm.pem` could be verified.
 - No live peer/testnet registration was proven; no `swarm.pem` contents were read or committed.
+
+## Phase 2 Live Gensyn Container Promotion Retry
+
+- [x] Re-check Docker Desktop, WSL, disk pressure, stale RL Swarm containers, and preferred patch workspace.
+- [x] Remove stale RL Swarm container state and reclaim safe Docker cache.
+- [x] Bake the `cookieStorage` patch and `setuptools<81` build constraint into the CPU image path.
+- [x] Start the CPU container with transient credentials and bounded log capture.
+- [x] Verify `http://localhost:3000` reaches the login page or capture the exact new blocker.
+- [x] If login page is reachable, pause for browser login and verify `swarm.pem` exists without reading contents.
+- [x] Continue to peer/testnet status, official swarm-unavailable state, or a concrete upstream/runtime blocker.
+- [x] Update Gensyn docs, run secret/regression checks, commit evidence, and push if requested.
+
+## Phase 2 Live Gensyn Container Promotion Retry Review
+
+- Clean restart resolved the stale-container deletion hang, and the previous stale RL Swarm container was removed.
+- Docker build cache was reclaimed without deleting volumes or unrelated named images.
+- The external RL Swarm workspace was patched with the SSR-preserving `cookieStorage` fix, a shared `setuptools<81` requirements constraint, and a non-interactive prompt guard.
+- The CPU image build passed modal-login build and Python dependency installation; the previous `pkg_resources` failure did not recur.
+- Docker Desktop produced a snapshot/unpack issue for the newly named Compose image, but the usable `rl-swarm-swarm-cpu` image contained the modal fix and could run.
+- The live container served `http://localhost:3000` with HTTP 200.
+- Browser login completed, API key activation succeeded, and `swarm.pem` was generated in the ignored external workspace without reading or committing key contents.
+- RL Swarm logged `Connected to Gensyn Testnet`.
+- Final blocker moved to P2P bootstrap: all emitted bootnode ports on `38.101.215.15` failed from Windows, WSL, and container checks, and the runner exited with `failed to connect to bootstrap peers`.
