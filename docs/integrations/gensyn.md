@@ -198,11 +198,25 @@ Current conclusion:
 - Official Gensyn documentation currently labels RL Swarm as deprecated and states that there are no official swarms running right now. Bootstrap-peer failures are also a known historical issue pattern in the RL Swarm tracker.
 - Do not spend more time patching the local container path until Gensyn publishes reachable bootnodes, a community-owned swarm endpoint, or support confirms a replacement network path.
 
+Upstream resolution follow-up:
+
+- The current RL Swarm `main` branch and `v0.7.0` CodeZero release use the same `SWARM_CONTRACT` address: `0x7745a8FE4b8D2D2c3BB103F8dCae822746F35Da0`.
+- Direct contract reads from the CPU image succeeded against `https://gensyn-testnet.g.alchemy.com/public`: chain id `685685`, current round `28239`, stage `0`, and `getBootnodesCount() == 3`.
+- The contract's live `getBootnodes()` response is exactly the three unreachable `38.101.215.15:30021-30023` multiaddrs from the failed run.
+- Historical bootnodes observed in prior RL Swarm issues, including `38.101.215.12:30011`, `38.101.215.13:30012`, `38.101.215.14:30013`, `38.101.215.14:31111`, `38.101.215.14:31222`, `38.101.215.14:31333`, and `38.101.215.13:30002`, also failed TCP checks.
+- This means a manual override to older known Gensyn bootnodes is not currently a working fix.
+- RL Swarm training bootnodes are contract-driven: `SwarmGameManager` and proposer setup overwrite `communication_kwargs.initial_peers` with `coordinator.get_bootnodes()`.
+- The run script hardcodes the official `SWARM_CONTRACT`; setting `SWARM_CONTRACT=... ./run_rl_swarm.sh` is not enough unless the script is patched or a compatible community-owned coordinator contract is wired in.
+- The documented `--initial_peers` flag is for the web API path and does not provide a clean training bootstrap override.
+
 Escalation package:
 
 - Attach the relevant non-secret section of `live-run.log` showing `Connected to Gensyn Testnet`, emitted bootnodes, and `failed to connect to bootstrap peers`.
 - Include the Windows, WSL, Docker, and AWS reachability matrix above.
 - Include system context: Windows with WSL2 Ubuntu 22.04, Docker Desktop Linux engine, CPU-only RL Swarm container, generated `swarm.pem` present but contents private.
+- Include safe host details: Intel Core Ultra 7 155H, 16 cores / 22 logical processors, 16.5 GB physical RAM, Docker Desktop server `28.4.0`, Compose `v2.39.4-desktop.1`, WSL kernel `6.6.87.2-microsoft-standard-WSL2`, and `nvidia-smi` currently failing in WSL with `Failed to initialize NVML: N/A`.
+- Ask Gensyn to confirm whether those on-chain bootnodes should be reachable, whether an active community-owned swarm endpoint exists, or whether the CodeZero release requires a replacement bootstrap configuration.
+- If Gensyn or a community operator provides a compatible coordinator contract, first query `getBootnodes()`, test every returned multiaddr with raw TCP, then patch the external RL Swarm script/config to use that contract and rerun the CPU container.
 
 Evidence files remain outside the repo under `/root/hivemind-live/gensyn/matrix-cookie-storage/logs/hivemind-retry/`:
 

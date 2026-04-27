@@ -153,3 +153,22 @@
 - Official Gensyn docs currently label RL Swarm as deprecated and state there are no official swarms running right now.
 - The patched CPU RL Swarm path was not rerun because raw TCP reachability failed from every tested egress path; rerunning would only reproduce the same bootstrap failure.
 - Current root cause classification: upstream Gensyn bootnode availability/routing/filtering or no active official swarm, not a local Docker/WSL/login/identity problem.
+
+## Phase 2 Live Gensyn Upstream Resolution
+
+- [x] Capture the user correction as a lesson: upstream classification is not completion.
+- [x] Query the current Gensyn testnet contract for live bootnodes and round state.
+- [x] Test historical bootnodes from prior RL Swarm issues as a possible manual override.
+- [x] Collect safe environment fields for a Gensyn escalation package.
+- [x] Identify a current official/community replacement path for RL Swarm/CodeZero.
+- [x] Submit or prepare a support/GitHub escalation with sanitized evidence.
+- [ ] If Gensyn provides reachable bootnodes or a community swarm, rerun the patched CPU RL Swarm path to live peer participation.
+
+## Phase 2 Live Gensyn Upstream Resolution Review
+
+- Current `origin/main` is `9c95410`; `v0.7.0` CodeZero tag exists at `992569c`, and both use the same official `SWARM_CONTRACT` address.
+- Direct on-chain reads confirmed the live official contract still advertises only the three unreachable `38.101.215.15:30021-30023` bootnodes.
+- Historical Gensyn bootnodes from older issue reports were also unreachable, so manual fallback to older peers is not viable.
+- Open upstream work still describes missing active bootstrap servers / DHT bootstrap failure, so local dependency patching is not enough to produce live peer participation.
+- Training bootnodes are contract-driven and overwrite Hydra/env initial-peer overrides, so a real community path needs either a compatible coordinator contract or an external RL Swarm code patch.
+- Added `docs/integrations/gensyn-escalation.md` with a sanitized escalation draft and evidence list.
