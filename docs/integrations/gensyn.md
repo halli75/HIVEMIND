@@ -113,6 +113,27 @@ Current blocker:
 - Provide a Hugging Face write token as `HF_TOKEN` if the RL Swarm setup prompts for model upload or participation.
 - Complete browser login if setup opens `http://localhost:3000`; keep the generated `swarm.pem` secret and uncommitted.
 
+Follow-up attempt date: 2026-04-26.
+
+Additional observed state after Docker Desktop was started:
+
+- Docker Desktop and WSL integration were reachable from both PowerShell and `Ubuntu-22.04`.
+- `docker run --rm hello-world` succeeded.
+- RL Swarm was cloned to `/root/hivemind-live/gensyn/rl-swarm`, outside the HIVEMIND repo.
+- Official clone commit used for the attempt: `9c95410 Merge pull request #578 from gensyn-ai/readme_updates`.
+- CPU Docker build first failed in the upstream `hivemind` dependency because `pkg_resources` was unavailable in pip build isolation.
+- A local-only external patch pinned `setuptools<81` through `PIP_CONSTRAINT`, which allowed the CPU image to build.
+- The first CPU container reached the modal login gate, published port 3000, and waited for `modal-login/temp-data/userData.json`.
+- The modal login page returned a Next.js server error: `Cannot read properties of undefined (reading 'hasHydrated')`.
+- A local-only external patch enabled Account Kit `cookieStorage` in `modal-login/config.ts`, but subsequent `docker run`/`docker compose run` attempts against the rebuilt image stalled before container output and did not reach the login screen.
+- No `user/keys/swarm.pem` was generated.
+- No live peer/testnet registration was proven.
+- The provided Hugging Face token was not written to repo files and the flow did not reach the Hugging Face prompt.
+
+Current blocker:
+
+- RL Swarm's current upstream Docker/login path is not demo-stable in this environment without additional upstream troubleshooting. The local AXL runner remains the verified Gensyn proof path for Phase 2.
+
 ## Integration Steps
 
 1. Start two independent processes.

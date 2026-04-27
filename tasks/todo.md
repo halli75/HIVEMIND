@@ -81,3 +81,12 @@
 - Verified web build/typecheck and audit: build passed and audit found 0 moderate vulnerabilities.
 - Verified contracts sequentially after avoiding a Hardhat cache race from parallel commands: compile, test, deploy-local, and audit passed.
 - Live Gensyn/RL Swarm setup attempt reached an environment/credential gate: Docker Desktop Linux engine was unavailable, Docker was not integrated inside WSL, WSL memory was below the documented 32 GB target, GPU readiness could not be verified without elevation, and no Hugging Face/Gensyn/W&B env vars were present.
+
+## Phase 2 Live Gensyn Follow-Up
+
+- [x] Re-check Docker Desktop and WSL integration after user enabled Docker Desktop.
+- [x] Use the provided Hugging Face token only as a transient env var; do not write it to repo files or logs.
+- [x] Clone or update RL Swarm in an external WSL workspace outside this repo.
+- [x] Run official setup far enough to reach browser login, HF token, Docker, or current-network availability gate.
+- [x] Capture non-secret evidence and update `docs/integrations/gensyn.md`.
+- [x] Verify no secrets were committed and push documentation if changed.
