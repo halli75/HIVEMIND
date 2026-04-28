@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
+
+import httpx
 
 from .axl import transcript_stats
 from .models import Action, AgentArchetype, AgentState, LeaderboardEntry, Scenario
@@ -248,3 +251,140 @@ class LocalExecutionProvider:
                 "scenario_id": scenario.scenario_id,
             },
         }
+
+
+def _build_inference_prompt(archetype: "AgentArchetype", scenario: "Scenario") -> str:
+    return (
+        f"You are a {archetype.name} trading agent (tier {archetype.tier}).\n"
+        f"Scenario: {scenario.label}\n"
+        f"Market sentiment: {scenario.sentiment:.2f}, "
+        f"volatility: {scenario.volatility:.2f}, "
+        f"liquidity_delta: {scenario.liquidity_delta:.2f}\n\n"
+        'Respond ONLY with valid JSON (no markdown, no explanation):\n'
+        '{"action": "buy"|"sell"|"hold", "confidence": 0.0-1.0}'
+    )
+
+
+class ZeroGComputeInferenceProvider:
+    def __init__(
+        self,
+        *,
+        api_base_url: str,
+        bearer_token: str,
+        model: str,
+        timeout: float = 15.0,
+    ) -> None:
+        self._base = api_base_url.rstrip("/")
+        self._token = bearer_token
+        self._model = model
+        self._timeout = timeout
+        self._fallback = LocalInferenceProvider()
+
+    def evaluate_agent(
+        self,
+        *,
+        agent_id: str,
+        archetype: "AgentArchetype",
+        scenario: "Scenario",
+        jitter: float,
+    ) -> "AgentState":
+        prompt = _build_inference_prompt(archetype, scenario)
+        try:
+            resp = httpx.post(
+                f"{self._base}/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self._token}"},
+                json={
+                    "model": self._model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                    "max_tokens": 64,
+                },
+                timeout=self._timeout,
+            )
+            resp.raise_for_status()
+            raw = json.loads(resp.json()["choices"][0]["message"]["content"])
+            action_str = str(raw["action"]).lower()
+            if action_str not in {"buy", "sell", "hold"}:
+                raise ValueError(f"unexpected action: {action_str}")
+            action = cast("Action", action_str)
+            confidence = float(raw["confidence"])
+            confidence = max(0.0, min(1.0, confidence))
+        except Exception:
+            state = self._fallback.evaluate_agent(
+                agent_id=agent_id, archetype=archetype, scenario=scenario, jitter=jitter
+            )
+            return AgentState(
+                agent_id=state.agent_id,
+                archetype=state.archetype,
+                tier=state.tier,
+                action=state.action,
+                confidence=state.confidence,
+                pnl_bps=state.pnl_bps,
+                aiq=state.aiq,
+                score=state.score,
+                rationale=state.rationale,
+                inference_source="local_fallback",
+                model="",
+            )
+
+        aiq = aiq_for(archetype, scenario, confidence, jitter)
+        pnl_bps = pnl_bps_for(action, archetype, scenario, jitter)
+        score = score_for(confidence, pnl_bps, aiq, archetype.tier)
+        return AgentState(
+            agent_id=agent_id,
+            archetype=archetype.name,
+            tier=archetype.tier,
+            action=action,
+            confidence=confidence,
+            pnl_bps=pnl_bps,
+            aiq=aiq,
+            score=score,
+            rationale=f"0G/{self._model}: {archetype.name} → {action} (conf={confidence:.2f})",
+            inference_source="0g_compute",
+            model=self._model,
+        )
+
+
+class HybridInferenceProvider:
+    """Local first pass for all agents; re-evaluates top-N with real 0G Compute."""
+
+    def __init__(self, *, real: ZeroGComputeInferenceProvider, top_n: int = 10) -> None:
+        self._local = LocalInferenceProvider()
+        self._real = real
+        self._top_n = top_n
+
+    def evaluate_agent(
+        self,
+        *,
+        agent_id: str,
+        archetype: "AgentArchetype",
+        scenario: "Scenario",
+        jitter: float,
+    ) -> "AgentState":
+        return self._local.evaluate_agent(
+            agent_id=agent_id, archetype=archetype, scenario=scenario, jitter=jitter
+        )
+
+    def refine_top_n(
+        self,
+        states: list["AgentState"],
+        scenario: "Scenario",
+        archetypes: dict[str, "AgentArchetype"],
+    ) -> list["AgentState"]:
+        sorted_states = sorted(states, key=lambda s: s.score, reverse=True)
+        top = sorted_states[: self._top_n]
+        rest = sorted_states[self._top_n :]
+
+        def refine_one(state: "AgentState") -> "AgentState":
+            archetype = archetypes[state.agent_id]
+            return self._real.evaluate_agent(
+                agent_id=state.agent_id,
+                archetype=archetype,
+                scenario=scenario,
+                jitter=0.0,
+            )
+
+        with ThreadPoolExecutor(max_workers=max(1, len(top))) as executor:
+            refined = list(executor.map(refine_one, top))
+
+        return refined + rest

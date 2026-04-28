@@ -26,11 +26,14 @@ from .models import (
 )
 from .providers import (
     ExecutionProvider,
+    HybridInferenceProvider,
     InferenceProvider,
     LocalAxlMessageBus,
+    LocalInferenceProvider,
     MessageBus,
     SeedReplay,
     StorageProvider,
+    ZeroGComputeInferenceProvider,
 )
 
 __all__ = [
@@ -42,10 +45,12 @@ __all__ = [
     "AxlTranscriptStats",
     "DEFAULT_ARCHETYPES",
     "ExecutionProvider",
+    "HybridInferenceProvider",
     "InferenceProvider",
     "IntegrationEnvelope",
     "LeaderboardEntry",
     "LocalAxlMessageBus",
+    "LocalInferenceProvider",
     "MessageBus",
     "RunMode",
     "Scenario",
@@ -54,6 +59,7 @@ __all__ = [
     "SwarmEngine",
     "SwarmSnapshot",
     "TierMetric",
+    "ZeroGComputeInferenceProvider",
     "append_jsonl",
     "archetype_by_name",
     "payload_digest",

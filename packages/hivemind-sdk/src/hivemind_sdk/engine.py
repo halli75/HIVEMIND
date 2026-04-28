@@ -20,6 +20,7 @@ from .models import (
 )
 from .providers import (
     ExecutionProvider,
+    HybridInferenceProvider,
     InferenceProvider,
     LocalExecutionProvider,
     LocalAxlMessageBus,
@@ -126,7 +127,13 @@ class SwarmEngine:
 
     def inject_scenario(self, scenario: Scenario) -> SwarmSnapshot:
         self._sequence += 1
-        agent_states = tuple(self._evaluate_agent(agent, scenario) for agent in self._agents)
+        agent_states = list(self._evaluate_agent(agent, scenario) for agent in self._agents)
+        if isinstance(self._inference_provider, HybridInferenceProvider):
+            archetype_map = {a.agent_id: a.archetype for a in self._agents}
+            agent_states = self._inference_provider.refine_top_n(
+                agent_states, scenario, archetype_map
+            )
+        agent_states = tuple(agent_states)
         leaderboard = self._build_leaderboard(agent_states)
         tier_metrics = self._build_tier_metrics(agent_states, scenario)
         integrations = self._integration_envelope(scenario, agent_states, leaderboard)
@@ -254,12 +261,17 @@ class SwarmEngine:
             winner=winner,
             state_digest=state_digest,
         )
+        _is_real = isinstance(self._inference_provider, HybridInferenceProvider)
+        _real_count = sum(1 for s in agent_states if s.inference_source == "0g_compute") if _is_real else 0
+        _model = self._inference_provider._real._model if _is_real else "local-deterministic"
         return IntegrationEnvelope(
             zero_g_compute={
-                "mode": "seed_replay" if self._run_mode == "seed_replay" else "mock",
+                "mode": "0g_compute" if _is_real else ("seed_replay" if self._run_mode == "seed_replay" else "mock"),
                 "request_id": f"0g-compute-{self._sequence:04d}",
                 "inference_calls": len(agent_states),
-                "model_tier": "local-deterministic",
+                "model_tier": _model,
+                "real_inference_count": _real_count,
+                "fallback_count": (self._inference_provider._top_n - _real_count) if _is_real else 0,
             },
             zero_g_storage=storage,
             gensyn_axl=axl,

@@ -99,6 +99,8 @@ class AgentState:
     aiq: float
     score: float
     rationale: str
+    inference_source: str = "local"
+    model: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -8,7 +8,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from hivemind_sdk import LocalAxlMessageBus, Scenario, SwarmEngine
+from hivemind_sdk import (
+    HybridInferenceProvider,
+    LocalAxlMessageBus,
+    LocalInferenceProvider,
+    Scenario,
+    SwarmEngine,
+    ZeroGComputeInferenceProvider,
+)
 
 
 class ScenarioRequest(BaseModel):
@@ -80,6 +87,7 @@ def _default_engine(
     runs_dir = _resolve_repo_path(root, transcript_root or os.environ.get("HIVEMIND_RUNS_DIR") or root / "runs")
     transcript_path_value = axl_transcript_path or os.environ.get("GENSYN_AXL_TRANSCRIPT_PATH")
     use_mock_gensyn = os.environ.get("HIVEMIND_USE_MOCK_GENSYN", "true").lower() in {"1", "true", "yes"}
+    use_mock_inference = os.environ.get("HIVEMIND_MOCK_INFERENCE", "true").lower() not in {"0", "false", "no"}
     message_bus = None
     run_mode = None
     if transcript_path_value and not use_mock_gensyn:
@@ -87,11 +95,22 @@ def _default_engine(
         if transcript_path.exists() and transcript_path.suffix == ".jsonl":
             message_bus = LocalAxlMessageBus(transcript_path=transcript_path)
             run_mode = "local_axl"
+    inference_provider: LocalInferenceProvider | HybridInferenceProvider
+    if not use_mock_inference:
+        zero_g = ZeroGComputeInferenceProvider(
+            api_base_url=os.environ["ZERO_G_COMPUTE_API_BASE_URL"],
+            bearer_token=os.environ["ZERO_G_COMPUTE_BEARER_TOKEN"],
+            model=os.environ.get("ZERO_G_COMPUTE_MODEL", "qwen-2.5-7b-instruct"),
+        )
+        inference_provider = HybridInferenceProvider(real=zero_g, top_n=10)
+    else:
+        inference_provider = LocalInferenceProvider()
     return SwarmEngine(
         seed_snapshot_dir=seed_dir,
         transcript_root=runs_dir,
         message_bus=message_bus,
         run_mode=run_mode,
+        inference_provider=inference_provider,
     )
 
 
