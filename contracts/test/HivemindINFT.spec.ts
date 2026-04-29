@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { EventLog } from "ethers";
 
 import { network } from "hardhat";
 
@@ -29,11 +30,11 @@ describe("HivemindINFT", function () {
     );
     await tx.wait();
 
-    const events = await inft.queryFilter(
+    const events = (await inft.queryFilter(
       inft.filters.AgentCrystallized(),
       deploymentBlock,
       "latest"
-    );
+    )) as unknown as EventLog[];
     assert.equal(events.length, 1);
     assert.equal(events[0].args[0], 1n);
     assert.equal(events[0].args[1], winner.address);
@@ -76,8 +77,8 @@ describe("HivemindINFT", function () {
     // winner transfers to other
     const sealedKey = ethers.hexlify(ethers.randomBytes(32));
     const proof = ethers.hexlify(ethers.randomBytes(16));
-    const inftAsWinner = inft.connect(winner);
-    const tx = await inftAsWinner.transfer(winner.address, other.address, 1, sealedKey, proof);
+    const inftAsWinner = inft.connect(winner) as unknown as typeof inft;
+    const tx = await (inftAsWinner as any).transfer(winner.address, other.address, 1, sealedKey, proof);
     await tx.wait();
 
     assert.equal(await inft.ownerOf(1), other.address);
@@ -85,11 +86,11 @@ describe("HivemindINFT", function () {
     assert.equal(await inft.balanceOf(other.address), 1n);
 
     // Check PublishedSealedKey event
-    const sealedEvents = await inft.queryFilter(
+    const sealedEvents = (await inft.queryFilter(
       inft.filters.PublishedSealedKey(),
       deploymentBlock,
       "latest"
-    );
+    )) as unknown as EventLog[];
     assert.equal(sealedEvents.length, 1);
     assert.equal(sealedEvents[0].args[0], 1n); // tokenId
   });
@@ -109,8 +110,8 @@ describe("HivemindINFT", function () {
 
     const sealedKey = ethers.hexlify(ethers.randomBytes(32));
     const proof = ethers.hexlify(ethers.randomBytes(16));
-    const inftAsWinner = inft.connect(winner);
-    const tx = await inftAsWinner.clone(other.address, 1, sealedKey, proof);
+    const inftAsWinner = inft.connect(winner) as unknown as typeof inft;
+    const tx = await (inftAsWinner as any).clone(other.address, 1, sealedKey, proof);
     await tx.wait();
 
     // Token 2 was cloned; winner still owns token 1
@@ -123,11 +124,11 @@ describe("HivemindINFT", function () {
     assert.equal(ref1.strategyDigest, ref2.strategyDigest);
 
     // MetadataUpdated emitted for cloned token (and original mint)
-    const metaEvents = await inft.queryFilter(
+    const metaEvents = (await inft.queryFilter(
       inft.filters.MetadataUpdated(),
       deploymentBlock,
       "latest"
-    );
+    )) as unknown as EventLog[];
     const cloneMetaEvent = metaEvents.find((e) => e.args[0] === 2n);
     assert.ok(cloneMetaEvent, "MetadataUpdated for token 2 not emitted");
   });
@@ -147,18 +148,18 @@ describe("HivemindINFT", function () {
     assert.equal(await inft.isAuthorized(1, other.address), false);
 
     const permissions = ethers.hexlify(ethers.toUtf8Bytes("read"));
-    const inftAsWinner = inft.connect(winner);
+    const inftAsWinner = inft.connect(winner) as unknown as typeof inft;
     const deploymentBlock = await ethers.provider.getBlockNumber();
-    const tx = await inftAsWinner.authorizeUsage(1, other.address, permissions);
+    const tx = await (inftAsWinner as any).authorizeUsage(1, other.address, permissions);
     await tx.wait();
 
     assert.equal(await inft.isAuthorized(1, other.address), true);
 
-    const authEvents = await inft.queryFilter(
+    const authEvents = (await inft.queryFilter(
       inft.filters.UsageAuthorized(),
       deploymentBlock,
       "latest"
-    );
+    )) as unknown as EventLog[];
     assert.equal(authEvents.length, 1);
     assert.equal(authEvents[0].args[0], 1n);         // tokenId
     assert.equal(authEvents[0].args[1], other.address); // executor

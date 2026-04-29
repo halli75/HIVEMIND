@@ -107,6 +107,7 @@ contract HivemindINFT {
         bytes calldata /*proof*/
     ) external {
         if (_owners[tokenId] == address(0)) revert TokenDoesNotExist();
+        if (msg.sender != from) revert NotTokenOwner();
         if (_owners[tokenId] != from) revert NotTokenOwner();
         if (to == address(0)) revert InvalidRecipient();
 

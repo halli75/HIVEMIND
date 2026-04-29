@@ -10,7 +10,7 @@
     "deploy:local": "hardhat run scripts/deploy-inft.ts --network hardhat",
     "deploy:0g:galileo": "hardhat run scripts/deploy-inft.ts --network zerogGalileo",
     "mint": "hardhat run scripts/mint-inft.ts --network zerogGalileo",
-    "mint:mock": "bash -c 'MINT_MOCK=1 hardhat run scripts/mint-inft.ts --network zerogGalileo'"
+    "mint:mock": "cross-env MINT_MOCK=1 MINT_MOCK_STORAGE=1 hardhat run scripts/mint-inft.ts --network zerogGalileo"
   },
   "dependencies": {
     "@0glabs/0g-ts-sdk": "^0.3.3"
@@ -18,11 +18,15 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-ethers": "^4.0.9",
     "@types/node": "^22.10.2",
+    "cross-env": "^7.0.3",
     "dotenv": "^16.4.5",
-    "ethers": "^6.14.0",
+    "ethers": "6.13.1",
     "hardhat": "^3.4.1",
     "tsx": "^4.20.6",
     "typescript": "^5.6.3"
+  },
+  "overrides": {
+    "axios": "^1.7.9"
   },
   "type": "module"
 }

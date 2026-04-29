@@ -3,7 +3,7 @@
  *
  * Usage:
  *   npm run mint                     # reads winning agent from HIVEMIND_API_URL/state
- *   npm run mint:mock                # uses hardcoded demo agent (no API or contract needed)
+ *   npm run mint:mock                # uses hardcoded demo agent (API call skipped; still mints on-chain)
  *
  * Required env vars (from .env):
  *   DEPLOYER_PRIVATE_KEY             wallet that is the contract minter
@@ -11,6 +11,11 @@
  *   ZERO_G_RPC_URL                   0G Galileo RPC endpoint
  *   ZERO_G_STORAGE_INDEXER_URL       0G Storage indexer (default: testnet standard)
  *   HIVEMIND_API_URL                 running API (default: http://localhost:8000)
+ *
+ * Optional:
+ *   MINT_MOCK=1                      Use hardcoded demo agent instead of live API
+ *   MINT_MOCK_STORAGE=1              Allow minting even when 0G Storage upload fails
+ *                                    (uses sha256 content-hash URI as fallback — for testing only)
  */
 
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
@@ -169,16 +174,14 @@ function encryptStrategy(winner: AgentWinner): EncryptResult {
 async function uploadToZeroGStorage(
   encryptedBuffer: Buffer,
   contentHash: string,
-  signer: Awaited<ReturnType<typeof ethers.getSigner>>
+  signer: Awaited<ReturnType<typeof ethers.getSigner>>,
+  mockStorage: boolean
 ): Promise<{ storageUri: string; uploadTxHash: string | null; rootHash: string }> {
-  const fallbackUri = `0g://storage/hivemind/${contentHash}`;
-
   let tempFile: string | null = null;
   try {
-    // Dynamic import — gracefully skips if SDK not installed
     const { ZgFile, Indexer } = await import("@0glabs/0g-ts-sdk");
 
-    // ZgFile requires a file path, not a buffer — write temp file
+    // ZgFile requires a file path — write temp file
     tempFile = join(tmpdir(), `hivemind-${contentHash}.enc`);
     writeFileSync(tempFile, encryptedBuffer);
 
@@ -188,7 +191,8 @@ async function uploadToZeroGStorage(
     try {
       const indexer = new Indexer(INDEXER_URL);
       // upload returns [{txHash, rootHash}, Error | null]
-      const [res, err] = await indexer.upload(zgFile, RPC_URL, signer);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const [res, err] = await indexer.upload(zgFile, RPC_URL, signer as any);
       if (err) throw err;
       result = res;
     } finally {
@@ -199,12 +203,20 @@ async function uploadToZeroGStorage(
     const storageUri = `0g://storage/hivemind/${rootHash}`;
     console.log(`  rootHash:  ${rootHash}`);
     console.log(`  upload tx: ${uploadTxHash}`);
-
     return { storageUri, uploadTxHash, rootHash };
   } catch (sdkErr) {
-    console.warn(`  0G Storage SDK unavailable or upload failed: ${sdkErr}`);
-    console.warn("  Using sha256 content-hash URI (upload skipped — set ZERO_G_STORAGE_INDEXER_URL to retry).");
-    return { storageUri: fallbackUri, uploadTxHash: null, rootHash: contentHash };
+    if (!mockStorage) {
+      throw new Error(
+        `0G Storage upload failed: ${sdkErr}\n\n` +
+        `Encrypted strategy must be stored on 0G before minting.\n` +
+        `Fix the upload error, or set MINT_MOCK_STORAGE=1 to bypass (testing only).`
+      );
+    }
+    // Mock-storage mode: fall back to content-hash URI for local testing
+    console.warn(`  [MOCK_STORAGE] Upload failed: ${sdkErr}`);
+    console.warn(`  [MOCK_STORAGE] Using sha256 fallback URI — not a real 0G Storage upload.`);
+    const storageUri = `0g://storage/hivemind/${contentHash}`;
+    return { storageUri, uploadTxHash: null, rootHash: contentHash };
   } finally {
     if (tempFile) {
       try { unlinkSync(tempFile); } catch { /* ignore */ }
@@ -283,9 +295,11 @@ async function mintINFT(
 // ---------------------------------------------------------------------------
 async function main() {
   const isMock = process.env.MINT_MOCK === "1" || process.argv.includes("--mock");
+  const isMockStorage = process.env.MINT_MOCK_STORAGE === "1";
 
   console.log("\n=== HIVEMIND iNFT Mint ===");
   console.log(`  Mode:    ${isMock ? "mock (demo agent)" : "live (from API)"}`);
+  console.log(`  Storage: ${isMockStorage ? "MOCK (sha256 fallback — not a real upload)" : "live (0G Storage)"}`);
   console.log(`  Network: 0G Galileo (chainId 16602)`);
   console.log();
 
@@ -319,7 +333,8 @@ async function main() {
   const { storageUri, uploadTxHash, rootHash } = await uploadToZeroGStorage(
     encryptedBuffer,
     contentHash,
-    signer
+    signer,
+    isMockStorage
   );
   console.log(`  Storage URI: ${storageUri}`);
 
