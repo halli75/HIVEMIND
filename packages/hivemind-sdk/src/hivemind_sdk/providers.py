@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -260,7 +261,7 @@ def _build_inference_prompt(archetype: "AgentArchetype", scenario: "Scenario") -
         f"Market sentiment: {scenario.sentiment:.2f}, "
         f"volatility: {scenario.volatility:.2f}, "
         f"liquidity_delta: {scenario.liquidity_delta:.2f}\n\n"
-        'Respond ONLY with valid JSON (no markdown, no explanation):\n'
+        'Respond ONLY with valid json (no markdown, no explanation):\n'
         '{"action": "buy"|"sell"|"hold", "confidence": 0.0-1.0}'
     )
 
@@ -290,17 +291,22 @@ class ZeroGComputeInferenceProvider:
     ) -> "AgentState":
         prompt = _build_inference_prompt(archetype, scenario)
         try:
-            resp = httpx.post(
-                f"{self._base}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {self._token}"},
-                json={
-                    "model": self._model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "response_format": {"type": "json_object"},
-                    "max_tokens": 64,
-                },
-                timeout=self._timeout,
-            )
+            resp = None
+            for attempt in range(4):
+                resp = httpx.post(
+                    f"{self._base}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._token}"},
+                    json={
+                        "model": self._model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 64,
+                    },
+                    timeout=self._timeout,
+                )
+                if resp.status_code == 429:
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                break
             resp.raise_for_status()
             raw = json.loads(resp.json()["choices"][0]["message"]["content"])
             action_str = str(raw["action"]).lower()
@@ -384,7 +390,7 @@ class HybridInferenceProvider:
                 jitter=0.0,
             )
 
-        with ThreadPoolExecutor(max_workers=max(1, len(top))) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             refined = list(executor.map(refine_one, top))
 
         return refined + rest

@@ -100,7 +100,7 @@ def _default_engine(
         zero_g = ZeroGComputeInferenceProvider(
             api_base_url=os.environ["ZERO_G_COMPUTE_API_BASE_URL"],
             bearer_token=os.environ["ZERO_G_COMPUTE_BEARER_TOKEN"],
-            model=os.environ.get("ZERO_G_COMPUTE_MODEL", "qwen-2.5-7b-instruct"),
+            model=os.environ.get("ZERO_G_COMPUTE_MODEL", "qwen/qwen-2.5-7b-instruct"),
         )
         inference_provider = HybridInferenceProvider(real=zero_g, top_n=10)
     else:
