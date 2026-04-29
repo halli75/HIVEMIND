@@ -69,12 +69,15 @@ table.
 
 ## Benchmark results
 
-Filled in by `benchmark.py` after each run. Latest snapshot:
+Filled in by `benchmark.py` after each run. Latest snapshot
+(`apps/axl-node/benchmark_results.json`, 2026-04-29, MacBook / Darwin
+25.3.0, Python 3.11):
 
 | nodes | msgs sent | msgs recv | duration (s) | msgs/sec | p50 (ms) | p95 (ms) | avg RSS (MB) | max RSS (MB) |
 |------:|----------:|----------:|-------------:|---------:|---------:|---------:|-------------:|-------------:|
-| 2     | _tbd_     | _tbd_     | _tbd_        | _tbd_    | _tbd_    | _tbd_    | _tbd_        | _tbd_        |
-| 5     | _tbd_     | _tbd_     | _tbd_        | _tbd_    | _tbd_    | _tbd_    | _tbd_        | _tbd_        |
+| 2     | 2000      | 2000      | 0.056        | 36057.37 | 29.304   | 53.474   | 24.4         | 24.6         |
+| 5     | 2000      | 2000      | 0.052        | 38547.41 | 28.516   | 51.337   | 25.1         | 25.5         |
 
-(Run `python apps/axl-node/benchmark.py --nodes 2,5` and paste the
-printed table here for the Gensyn submission.)
+Re-run with `python apps/axl-node/benchmark.py --nodes 2,5` to refresh
+the JSON and paste the new table back into this section before each
+Gensyn submission.
