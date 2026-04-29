@@ -1,5 +1,7 @@
 # HIVEMIND
 
+![HIVEMIND Architecture](docs/architecture.svg)
+
 DeFi Swarm Intelligence Engine for the ETHGlobal OpenAgents hackathon.
 
 HIVEMIND simulates a DeFi swarm, crystallizes the winning strategy into an iNFT-backed agent, and executes a real Uniswap trade.
