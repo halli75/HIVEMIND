@@ -6,10 +6,54 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from statistics import median
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
-AxlMessageType = Literal["SCENARIO_SHOCK", "MARKET_SIGNAL", "TRADE_INTENT", "INFERENCE_RESULT"]
-AXL_MESSAGE_TYPES: set[str] = {"SCENARIO_SHOCK", "MARKET_SIGNAL", "TRADE_INTENT", "INFERENCE_RESULT"}
+AxlMessageType = Literal[
+    "SCENARIO_SHOCK",
+    "MARKET_SIGNAL",
+    "TRADE_INTENT",
+    "INFERENCE_RESULT",
+    "POOL_STATE",
+    "COALITION_INVITE",
+    "GOVERNANCE_SIGNAL",
+]
+AXL_MESSAGE_TYPES: set[str] = {
+    "SCENARIO_SHOCK",
+    "MARKET_SIGNAL",
+    "TRADE_INTENT",
+    "INFERENCE_RESULT",
+    "POOL_STATE",
+    "COALITION_INVITE",
+    "GOVERNANCE_SIGNAL",
+}
+
+
+class PoolStatePayload(TypedDict):
+    pool_address: str
+    token0: str
+    token1: str
+    fee_tier: int
+    tick: int
+    sqrt_price_x96: str
+    liquidity: str
+    tvl_usd: float
+
+
+class CoalitionInvitePayload(TypedDict):
+    coalition_id: str
+    proposer_agent_id: str
+    target_agent_id: str
+    objective: str
+    expires_at: str
+    minimum_stake: float
+
+
+class GovernanceSignalPayload(TypedDict):
+    proposal_id: str
+    voter_agent_id: str
+    vote: Literal["for", "against", "abstain"]
+    voting_power: float
+    rationale: str
 
 
 def utc_now_iso() -> str:

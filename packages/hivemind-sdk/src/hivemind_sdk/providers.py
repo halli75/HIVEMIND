@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -8,6 +9,28 @@ from typing import Any, Protocol, cast
 from .axl import transcript_stats
 from .models import Action, AgentArchetype, AgentState, LeaderboardEntry, Scenario
 from .scoring import aiq_for, choose_action, confidence_for, pnl_bps_for, score_for
+
+
+_VALID_ACTIONS: set[str] = {
+    "buy",
+    "sell",
+    "hold",
+    "provide_liquidity",
+    "hedge",
+    "rebalance",
+    "arb",
+    "vote",
+    "front_run",
+}
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def use_mock_inference() -> bool:
+    """Public helper: did the operator opt into archetype mock_decide?"""
+    return _env_truthy("HIVEMIND_USE_MOCK_INFERENCE")
 
 
 @dataclass(frozen=True)
@@ -122,6 +145,85 @@ class LocalInferenceProvider:
             tier=archetype.tier,
             action=cast(Action, action),
             confidence=confidence,
+            pnl_bps=pnl_bps,
+            aiq=aiq,
+            score=score,
+            rationale=rationale,
+        )
+
+
+class MockInferenceProvider:
+    """Inference path that calls archetype.mock_decide() instead of 0G Compute.
+
+    Selected when HIVEMIND_USE_MOCK_INFERENCE=true. The market_state and memory
+    arguments to mock_decide are derived from the scenario plus a small jitter
+    so each agent still gets a deterministic per-call view.
+    """
+
+    def evaluate_agent(
+        self,
+        *,
+        agent_id: str,
+        archetype: AgentArchetype,
+        scenario: Scenario,
+        jitter: float,
+    ) -> AgentState:
+        market_state: dict[str, Any] = {
+            "scenario_id": scenario.scenario_id,
+            "volatility": scenario.volatility,
+            "liquidity_delta": scenario.liquidity_delta,
+            "sentiment": scenario.sentiment,
+            "gas_pressure": scenario.gas_pressure,
+            "signal_strength": scenario.signal_strength,
+            "price_delta": scenario.sentiment * scenario.signal_strength,
+            "pool_spread_bps": max(0.0, scenario.volatility * 30.0 - 4.0),
+            "peg_delta": scenario.liquidity_delta * 0.005,
+        }
+        memory: dict[str, Any] = {
+            "axl_signals": [
+                {
+                    "id": f"sig-{agent_id}-mkt",
+                    "type": "MARKET_SIGNAL",
+                    "direction": "buy" if scenario.sentiment >= 0 else "sell",
+                    "confidence": min(0.99, abs(scenario.sentiment) * scenario.signal_strength + jitter * 0.1),
+                },
+                {
+                    "id": f"sig-{agent_id}-trade",
+                    "type": "TRADE_INTENT",
+                    "size_usd": 200_000 + scenario.volatility * 600_000,
+                },
+            ],
+            "lp_position": {
+                "in_range": scenario.liquidity_delta >= -0.4,
+                "impermanent_loss_delta": max(0.0, scenario.volatility * 0.04 - 0.005),
+                "range_lower": 1800 - scenario.volatility * 300,
+                "range_upper": 2200 + scenario.volatility * 300,
+            },
+            "social_graph": [
+                {"agent_id": "leader-001", "stake": 1_000_000, "vote": "for"},
+                {"agent_id": "leader-002", "stake": 750_000, "vote": "abstain"},
+            ],
+            "min_spread_bps": 8,
+        }
+
+        decision = archetype.mock_decide(market_state, memory)
+        action = decision.get("action", "hold")
+        if action not in _VALID_ACTIONS:
+            action = "hold"
+        confidence = float(decision.get("confidence", 0.5))
+        confidence = max(0.0, min(1.0, confidence))
+        rationale = str(decision.get("rationale", f"{archetype.name}: mock_decide"))
+
+        aiq = aiq_for(archetype, scenario, confidence, jitter)
+        pnl_bps = pnl_bps_for(action, archetype, scenario, jitter)
+        score = score_for(confidence, pnl_bps, aiq, archetype.tier)
+
+        return AgentState(
+            agent_id=agent_id,
+            archetype=archetype.name,
+            tier=archetype.tier,
+            action=cast(Action, action),
+            confidence=round(confidence, 4),
             pnl_bps=pnl_bps,
             aiq=aiq,
             score=score,
@@ -244,6 +346,70 @@ class LocalExecutionProvider:
             },
             "swap_receipt": {
                 "status": "placeholder",
+                "transaction_hash": None,
+                "scenario_id": scenario.scenario_id,
+            },
+        }
+
+
+class UniswapExecutionProvider:
+    """Live Sepolia execution backed by an injected Uniswap client.
+
+    Quote-only by design: prepare_trade fetches a real /v1/quote response
+    but does not sign or broadcast. Live submission stays in the manual
+    apps/execution/run_swap.py path so a human always confirms the swap.
+    The injected client is duck-typed (must expose async get_quote) so the
+    SDK keeps zero runtime dependencies.
+    """
+
+    def __init__(
+        self,
+        *,
+        client: Any,
+        swapper_address: str,
+        token_in: str,
+        token_out: str,
+        amount_in_wei: int,
+        chain_id: int = 11155111,
+    ) -> None:
+        self._client = client
+        self._swapper_address = swapper_address
+        self._token_in = token_in
+        self._token_out = token_out
+        self._amount_in_wei = amount_in_wei
+        self._chain_id = chain_id
+
+    def prepare_trade(
+        self,
+        *,
+        scenario: Scenario,
+        winner: LeaderboardEntry,
+        state_digest: str,
+    ) -> dict[str, Any]:
+        import asyncio
+
+        quote = asyncio.run(
+            self._client.get_quote(
+                self._token_in,
+                self._token_out,
+                self._amount_in_wei,
+                chain_id=self._chain_id,
+                recipient=self._swapper_address,
+            )
+        )
+        inner = quote.get("quote") or {}
+        quote_id = inner.get("quoteId") or quote.get("quoteId") or f"uni-quote-{state_digest[:8]}"
+        route = inner.get("route") or quote.get("route") or ["WETH", "USDC"]
+
+        return {
+            "mode": "live",
+            "chain": "sepolia",
+            "route": route,
+            "recommended_action": winner.action,
+            "quote_id": quote_id,
+            "quote": inner or quote,
+            "swap_receipt": {
+                "status": "quoted",
                 "transaction_hash": None,
                 "scenario_id": scenario.scenario_id,
             },

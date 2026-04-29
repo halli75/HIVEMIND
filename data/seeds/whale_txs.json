@@ -1,0 +1,37 @@
+[
+  {
+    "wallet": "0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be",
+    "token": "WETH",
+    "amount_usd": 8420000.0,
+    "action": "buy",
+    "timestamp": "2026-04-12T07:42:11Z"
+  },
+  {
+    "wallet": "0xa9d1e08c7793af67e9d92fe308d5697fb81d3e43",
+    "token": "WETH",
+    "amount_usd": 12680000.0,
+    "action": "sell",
+    "timestamp": "2026-04-15T14:08:55Z"
+  },
+  {
+    "wallet": "0x8eb8a3b98659cce290402893d0123abb75e3ab28",
+    "token": "WBTC",
+    "amount_usd": 5470000.0,
+    "action": "buy",
+    "timestamp": "2026-04-19T22:31:09Z"
+  },
+  {
+    "wallet": "0x564286362092d8e7936f0549571a803b203aaced",
+    "token": "USDC",
+    "amount_usd": 24000000.0,
+    "action": "transfer_to_exchange",
+    "timestamp": "2026-04-22T11:55:33Z"
+  },
+  {
+    "wallet": "0x0a4c79ce84202b03e95b7a692e5d728d83c44c76",
+    "token": "WETH",
+    "amount_usd": 6210000.0,
+    "action": "buy",
+    "timestamp": "2026-04-26T18:20:04Z"
+  }
+]

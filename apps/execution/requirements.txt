@@ -1,0 +1,4 @@
+httpx>=0.27
+web3>=6.20
+python-dotenv>=1.0
+eth-account>=0.13

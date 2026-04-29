@@ -28,9 +28,13 @@ from .providers import (
     ExecutionProvider,
     InferenceProvider,
     LocalAxlMessageBus,
+    LocalExecutionProvider,
     MessageBus,
+    MockInferenceProvider,
     SeedReplay,
     StorageProvider,
+    UniswapExecutionProvider,
+    use_mock_inference,
 )
 
 __all__ = [
@@ -46,7 +50,9 @@ __all__ = [
     "IntegrationEnvelope",
     "LeaderboardEntry",
     "LocalAxlMessageBus",
+    "LocalExecutionProvider",
     "MessageBus",
+    "MockInferenceProvider",
     "RunMode",
     "Scenario",
     "SeedReplay",
@@ -54,11 +60,13 @@ __all__ = [
     "SwarmEngine",
     "SwarmSnapshot",
     "TierMetric",
+    "UniswapExecutionProvider",
     "append_jsonl",
     "archetype_by_name",
     "payload_digest",
     "parse_timestamp",
     "read_transcript",
     "transcript_stats",
+    "use_mock_inference",
     "utc_now_iso",
 ]
