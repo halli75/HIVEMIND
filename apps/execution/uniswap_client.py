@@ -39,6 +39,7 @@ class UniswapClient:
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._rpc_url = rpc_url
+        self._timeout = timeout
         self._http = httpx.AsyncClient(
             timeout=timeout,
             headers={
@@ -81,6 +82,44 @@ class UniswapClient:
             body["swapper"] = recipient
 
         resp = await self._http.post(f"{self._base_url}/v1/quote", json=body)
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"Uniswap /v1/quote failed: {resp.status_code} {resp.text}"
+            )
+        return resp.json()
+
+    def get_quote_sync(
+        self,
+        token_in: str,
+        token_out: str,
+        amount_in: int,
+        *,
+        chain_id: int = SEPOLIA_CHAIN_ID,
+        recipient: str | None = None,
+    ) -> dict[str, Any]:
+        """Synchronous variant of get_quote; safe to call from non-async contexts."""
+        self._require_sepolia(chain_id)
+        if amount_in <= 0:
+            raise ValueError("amount_in must be positive")
+
+        body: dict[str, Any] = {
+            "type": "EXACT_INPUT",
+            "tokenInChainId": chain_id,
+            "tokenOutChainId": chain_id,
+            "tokenIn": token_in,
+            "tokenOut": token_out,
+            "amount": str(amount_in),
+        }
+        if recipient:
+            body["swapper"] = recipient
+
+        headers = {
+            "x-api-key": self._api_key,
+            "accept": "application/json",
+            "content-type": "application/json",
+        }
+        with httpx.Client(timeout=self._timeout, headers=headers) as client:
+            resp = client.post(f"{self._base_url}/v1/quote", json=body)
         if resp.status_code >= 400:
             raise RuntimeError(
                 f"Uniswap /v1/quote failed: {resp.status_code} {resp.text}"

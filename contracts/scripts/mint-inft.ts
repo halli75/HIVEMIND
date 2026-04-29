@@ -36,6 +36,8 @@ const RPC_URL =
   process.env.ZERO_G_RPC_URL || "https://evmrpc-testnet.0g.ai";
 const API_URL = process.env.HIVEMIND_API_URL || "http://localhost:8000";
 const CONTRACT_ADDRESS = process.env.INFT_CONTRACT_ADDRESS;
+const STORAGE_MAX_ATTEMPTS = positiveIntFromEnv("MINT_STORAGE_MAX_ATTEMPTS", 4);
+const STORAGE_RETRY_BASE_MS = positiveIntFromEnv("MINT_STORAGE_RETRY_BASE_MS", 1500);
 
 const HIVEMIND_INFT_ABI = [
   "function mintAgent(address to, string calldata storageUri, bytes32 storageHash, string calldata model, string calldata strategyDigest, uint64 aiq) external returns (uint256)",
@@ -59,6 +61,37 @@ interface AgentWinner {
   model: string;
   inference_source: string;
   scenario_id: string;
+}
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+function errorText(err: unknown): string {
+  if (err instanceof Error) return `${err.name}: ${err.message}`;
+  return String(err);
+}
+
+function isRetryableStorageError(err: unknown): boolean {
+  const text = errorText(err).toLowerCase();
+  return (
+    text.includes("503") ||
+    text.includes("502") ||
+    text.includes("504") ||
+    text.includes("timeout") ||
+    text.includes("timed out") ||
+    text.includes("econnreset") ||
+    text.includes("enetunreach") ||
+    text.includes("fetch failed") ||
+    text.includes("service unavailable")
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -187,14 +220,35 @@ async function uploadToZeroGStorage(
 
     console.log("  Uploading to 0G Storage via SDK ...");
     const zgFile = await ZgFile.fromFilePath(tempFile);
-    let result: { txHash: string; rootHash: string };
+    let result: { txHash: string; rootHash: string } | null = null;
     try {
       const indexer = new Indexer(INDEXER_URL);
-      // upload returns [{txHash, rootHash}, Error | null]
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const [res, err] = await indexer.upload(zgFile, RPC_URL, signer as any);
-      if (err) throw err;
-      result = res;
+      let lastErr: unknown = null;
+      for (let attempt = 1; attempt <= STORAGE_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          console.log(`  Storage upload attempt ${attempt}/${STORAGE_MAX_ATTEMPTS} ...`);
+          // upload returns [{txHash, rootHash}, Error | null]
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const [res, err] = await indexer.upload(zgFile, RPC_URL, signer as any);
+          if (err) throw err;
+          result = res;
+          lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err;
+          const retryable = isRetryableStorageError(err);
+          console.warn(`  Storage upload attempt ${attempt} failed: ${errorText(err)}`);
+          if (!retryable || attempt === STORAGE_MAX_ATTEMPTS) break;
+          const delayMs = STORAGE_RETRY_BASE_MS * 2 ** (attempt - 1);
+          console.warn(`  Retrying 0G Storage upload in ${delayMs}ms ...`);
+          await sleep(delayMs);
+        }
+      }
+      if (lastErr || !result) {
+        const cause = lastErr ?? new Error("0G Storage SDK returned no upload result");
+        const status = isRetryableStorageError(lastErr) ? "storage_unavailable" : "storage_upload_failed";
+        throw new Error(`${status}: 0G Storage upload failed after ${STORAGE_MAX_ATTEMPTS} attempts: ${errorText(cause)}`);
+      }
     } finally {
       await zgFile.close();
     }

@@ -27,15 +27,35 @@ DEFAULT_AMOUNT_IN_WEI = int(Decimal("0.001") * Decimal(10**18))
 ALLOW_SWAP_ENV = "HIVEMIND_ALLOW_TESTNET_SWAP"
 
 
+def _find_first_key(value: object, key: str) -> object | None:
+    if isinstance(value, dict):
+        if key in value:
+            return value[key]
+        for child in value.values():
+            found = _find_first_key(child, key)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_first_key(child, key)
+            if found is not None:
+                return found
+    return None
+
+
 def _format_amount_out(quote: dict, fallback_decimals: int = 6) -> str:
     inner = quote.get("quote") or {}
     decimals_str = inner.get("amountOutDecimals")
     if decimals_str:
         return str(decimals_str)
-    raw = inner.get("amountOut") or quote.get("amountOut")
+    raw = inner.get("amountOut") or quote.get("amountOut") or _find_first_key(quote, "amountOut")
     if raw is None:
         return "?"
     return str(Decimal(int(raw)) / (Decimal(10) ** fallback_decimals))
+
+
+def _format_weth(amount_in_wei: int) -> str:
+    return str(Decimal(amount_in_wei) / Decimal(10**18)).rstrip("0").rstrip(".")
 
 
 def _amount_in_wei() -> int:
@@ -99,7 +119,7 @@ async def main() -> int:
 
     print("=== Uniswap Sepolia Quote ===")
     print(f"swapper:      {swapper}")
-    print(f"amount in:    0.001 WETH ({amount_in} wei)")
+    print(f"amount in:    {_format_weth(amount_in)} WETH ({amount_in} wei)")
     print(f"route:        {route if isinstance(route, list) else json.dumps(route)}")
     print(f"amount out:   {_format_amount_out(quote)} USDC")
     print(f"price impact: {price_impact}")

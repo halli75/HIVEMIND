@@ -14,15 +14,28 @@ HIVEMIND simulates a DeFi swarm, crystallizes the winning strategy into an iNFT-
 
 ## Status
 
-Phase 2 local AXL proof is live:
+Current MVD proof status:
 
 - `packages/hivemind-sdk`: deterministic swarm engine, provider adapter boundaries, seed replay, tier metrics, scenario injection, and transcript output.
 - `apps/api`: FastAPI REST and WebSocket API as the canonical scenario/state surface.
 - `apps/axl-node`: local AXL-compatible coordinator/evaluator processes over TCP JSONL with transcript evidence.
 - `apps/web`: React/Vite dashboard backed by the API/WebSocket stream with mock fallback.
-- `contracts`: Hardhat scaffold with a minimal `HivemindINFT` contract shape for 0G iNFT proof work.
+- `contracts`: Hardhat `HivemindINFT` with ERC-7857-style transfer/clone/authorizeUsage hooks and a Galileo mint script.
 - `data`: deterministic seed snapshots for local simulation.
 - `docs`: architecture and integration notes for 0G, Gensyn AXL, and Uniswap.
+
+## Live Proof Rehearsal
+
+Latest run: `runs/proof-20260429-161627/` (ignored evidence folder).
+
+| Surface | Status | Evidence |
+| --- | --- | --- |
+| Gensyn AXL | Verified local/self-hosted | API `run_mode=local_axl+live_0g`; self-hosted RL Swarm bootstrap previously reached CodeZero round `28239` |
+| 0G Compute | Live with fallback | 10 top-N calls, 9 live completions, 1 HTTP 429 fallback, avg latency 7607.476 ms |
+| 0G Storage | External blocker | 4 upload attempts returned 503 from the 0G Storage indexer |
+| iNFT mint | Blocked before chain tx | `/mint` encrypted the winner, then returned `storage_unavailable`; no Galileo mint was submitted |
+| Uniswap | Live quote | Sepolia quote id `3301ca8c-df76-4c88-a6ee-efc2ebfef35d`, `0.001 WETH -> 8.75588 USDC` |
+| Swap | Gated | `run_swap.py` refused to sign because `HIVEMIND_ALLOW_TESTNET_SWAP=true` was not enabled |
 
 ## AXL Benchmark Results
 
@@ -238,4 +251,4 @@ cd contracts
 
 ## Current Boundaries
 
-Phase 2 proves local cross-process AXL-style messaging and keeps live Gensyn/RL Swarm as a gated attempt. It does not yet claim live 0G Compute/Storage, iNFT testnet minting, or Uniswap API execution. ENS, KeeperHub, breeding, marketplace, LP management, live GraphRAG, and mainnet execution remain off the critical path.
+The critical path remains 0G, Gensyn AXL, and Uniswap. Live 0G Compute and Uniswap quote are proven; 0G Storage/iNFT mint is waiting on storage indexer recovery; Sepolia swap stays behind `HIVEMIND_ALLOW_TESTNET_SWAP=true` and operator review. ENS, KeeperHub, breeding, marketplace, LP management, live GraphRAG, and mainnet execution remain off the critical path.

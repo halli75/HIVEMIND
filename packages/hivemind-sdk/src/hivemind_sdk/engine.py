@@ -231,6 +231,49 @@ class SwarmEngine:
     def latest_snapshot(self) -> SwarmSnapshot:
         return self._snapshot
 
+    def record_inft_mint(
+        self,
+        *,
+        token_id: int | None,
+        tx_hash: str | None,
+        contract_address: str,
+        storage_uri: str | None,
+        storage_hash: str | None,
+        content_hash: str | None = None,
+    ) -> SwarmSnapshot:
+        """Attach the latest real iNFT mint proof to the current snapshot."""
+        snapshot = self._snapshot
+        previous_inft = dict(snapshot.proof.get("inft", {}))
+        inft_proof = {
+            **previous_inft,
+            "status": "minted",
+            "contract_address": contract_address,
+            "chain": "0g-galileo",
+            "chain_id": 16602,
+            "token_id": token_id,
+            "tx_hash": tx_hash,
+            "storage_uri": storage_uri,
+            "storage_hash": storage_hash,
+            "content_hash": content_hash,
+            "memory_uri": storage_uri or previous_inft.get("memory_uri"),
+            "explorer": f"https://chainscan-galileo.0g.ai/address/{contract_address}",
+            "tx_explorer": f"https://chainscan-galileo.0g.ai/tx/{tx_hash}" if tx_hash else None,
+        }
+        proof = {**snapshot.proof, "inft": inft_proof}
+        self._snapshot = SwarmSnapshot(
+            sequence=snapshot.sequence,
+            run_mode=snapshot.run_mode,
+            scenario=snapshot.scenario,
+            agents=snapshot.agents,
+            tier_metrics=snapshot.tier_metrics,
+            leaderboard=snapshot.leaderboard,
+            integrations=snapshot.integrations,
+            transcript=snapshot.transcript,
+            proof=proof,
+            event_log=(*snapshot.event_log, f"inft:minted:{token_id}"),
+        )
+        return self._snapshot
+
     @property
     def run_mode(self) -> RunMode:
         return self._run_mode

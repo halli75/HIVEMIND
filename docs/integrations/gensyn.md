@@ -1,8 +1,17 @@
-# Gensyn AXL Integration Plan
+# Gensyn AXL Integration
 
 ## Target
 
 Use Gensyn AXL-style communication as the cross-process messaging layer for the swarm. At minimum, the demo should show two separate node processes exchanging typed messages that affect agent scoring.
+
+## Current Proof Status - 2026-04-29
+
+Phase 2 remains verified through two evidence paths:
+
+- Local AXL runner: `runs/axl/pr-review-smoke.jsonl` contains typed cross-process messages consumed by the API when `GENSYN_AXL_TRANSCRIPT_PATH` is set.
+- Self-hosted RL Swarm bootstrap: the patched Docker path joined CodeZero Swarm with the self-hosted `/dns4/hivemind-bootnode/...` peer and began round `28239`.
+
+During the live proof rehearsal in `runs/proof-20260429-161627/`, `/health` reported `run_mode=local_axl+live_0g`, confirming the API was reading the local AXL transcript while live 0G Compute and Uniswap quote paths were enabled.
 
 ## Local Cross-Process Proof
 

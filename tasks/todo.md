@@ -227,3 +227,22 @@
 - Current `dev` is behind `main` by six 0G commits; merging as-is would delete the current 0G mint script, hardened 0G provider tests, and ERC-7857 contract hardening from `main`.
 - The local AXL proof is strong: smoke run produced 40 typed messages across two OS processes with p50/p95 latency.
 - The PR still needs a non-trivial rebase/merge of `main` before approval because the branch composition would regress Part A/Part B 0G work.
+
+## Phase 3/4 Live Proof Rehearsal And Mint Hardening
+
+- [x] Inspect current `/mint`, 0G Storage upload, and Uniswap execution code without overwriting existing E2E fixes.
+- [x] Add or verify bounded retry/backoff for 0G Storage upload.
+- [x] Ensure `/mint` returns a clear `storage_unavailable` status when the 0G Storage indexer returns 503 before minting.
+- [x] Retry `POST /mint` against the local API and capture token/tx/storage proof if 0G Storage has recovered.
+- [x] Run a full proof rehearsal: `/health`, `/scenario`, `/state`, `/mint`, Uniswap quote, and gated swap behavior.
+- [x] Save non-secret evidence under ignored `runs/`.
+- [x] Update `docs/integrations/0g.md`, `docs/integrations/uniswap.md`, `docs/integrations/gensyn.md`, `README.md`, and `FEEDBACK.md`.
+- [x] Run Python, web, contracts, AXL, diff, and secret-scan checks before any commit.
+
+## Phase 3/4 Live Proof Rehearsal Review
+
+- Evidence saved under ignored `runs/proof-20260429-161627/`.
+- `/scenario` succeeded with `run_mode=local_axl+live_0g`, 10 top-N 0G Compute attempts, 9 live completions, 1 HTTP 429 fallback, and a live Uniswap quote.
+- `/mint` fetched winner `agent-014`, encrypted with AES-256-GCM, wrote the local demo key under ignored `contracts/runs/inft-keys/`, then stopped before chain mint because 0G Storage returned HTTP 503 for all 4 retry attempts.
+- The patched `/mint` response is HTTP 503 with `detail.status="storage_unavailable"` instead of a generic 500.
+- Uniswap quote-only rehearsal succeeded with `0.001 WETH -> 8.75588 USDC`; swap script refused to sign because `HIVEMIND_ALLOW_TESTNET_SWAP=true` was not enabled.

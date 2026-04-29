@@ -86,7 +86,7 @@ def _build_execution_provider() -> ExecutionProvider | None:
         return None
 
     import sys as _sys
-    _exec_root = str(Path(__file__).resolve().parents[4] / "execution")
+    _exec_root = str(Path(__file__).resolve().parents[4] / "apps" / "execution")
     if _exec_root not in _sys.path:
         _sys.path.insert(0, _exec_root)
 
@@ -155,6 +155,22 @@ def _env_int(name: str, *, default: int) -> int:
     if value is None or value == "":
         return default
     return int(value)
+
+
+def _looks_like_storage_unavailable(output: str) -> bool:
+    normalized = output.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "storage_unavailable",
+            "service unavailable",
+            "503",
+            "502",
+            "504",
+            "timeout",
+            "timed out",
+        )
+    )
 
 
 def _use_mock_0g() -> bool:
@@ -354,7 +370,9 @@ def create_app(
             raise HTTPException(status_code=500, detail="contracts/ directory not found")
 
         npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
-        env = {**os.environ, "HIVEMIND_API_URL": "http://localhost:8000"}
+        env = {**os.environ}
+        env.setdefault("HIVEMIND_API_URL", "http://localhost:8000")
+        timeout_seconds = _env_int("MINT_SCRIPT_TIMEOUT_SECONDS", default=240)
 
         try:
             proc = await _asyncio.create_subprocess_exec(
@@ -364,28 +382,73 @@ def create_app(
                 stdout=_asyncio.subprocess.PIPE,
                 stderr=_asyncio.subprocess.STDOUT,
             )
-            stdout, _ = await _asyncio.wait_for(proc.communicate(), timeout=120)
+            stdout, _ = await _asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
         except _asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="Mint script timed out after 120s")
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "status": "mint_timeout",
+                    "message": f"Mint script timed out after {timeout_seconds}s",
+                },
+            )
 
         output = stdout.decode("utf-8", errors="replace")
 
         if proc.returncode != 0:
+            if _looks_like_storage_unavailable(output):
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "status": "storage_unavailable",
+                        "message": "0G Storage upload is unavailable; encryption succeeded but minting did not start.",
+                        "retry": "Retry POST /mint after the 0G Storage testnet recovers.",
+                        "output_tail": output[-3000:],
+                    },
+                )
             raise HTTPException(
                 status_code=500,
-                detail=f"Mint script exited {proc.returncode}:\n{output[-2000:]}",
+                detail={
+                    "status": "mint_failed",
+                    "message": f"Mint script exited {proc.returncode}",
+                    "output_tail": output[-3000:],
+                },
             )
 
         token_id_match = _re.search(r"Token ID:\s*(\d+)", output)
         tx_match = _re.search(r"Tx:\s*(https?://\S+)", output)
         storage_match = _re.search(r"Storage:\s*(https?://\S+)", output)
+        storage_uri_match = _re.search(r"Storage URI:\s*(\S+)", output)
+        root_hash_match = _re.search(r"rootHash:\s*(\S+)", output)
+        content_hash_match = _re.search(r"Content hash \(sha256\):\s*([0-9a-fA-F]+)", output)
+        tx_hash_match = _re.search(r"/tx/(0x[a-fA-F0-9]+)", tx_match.group(1) if tx_match else "")
+
+        token_id = int(token_id_match.group(1)) if token_id_match else None
+        tx_hash = tx_hash_match.group(1) if tx_hash_match else None
+        storage_uri = storage_uri_match.group(1) if storage_uri_match else None
+        storage_hash = root_hash_match.group(1) if root_hash_match else None
+        content_hash = content_hash_match.group(1) if content_hash_match else None
+
+        snapshot = app.state.engine.record_inft_mint(
+            token_id=token_id,
+            tx_hash=tx_hash,
+            contract_address=inft_address,
+            storage_uri=storage_uri,
+            storage_hash=storage_hash,
+            content_hash=content_hash,
+        )
+        await app.state.websocket_hub.broadcast({"type": "snapshot", "snapshot": snapshot.to_dict()})
 
         return {
             "status": "minted",
-            "token_id": int(token_id_match.group(1)) if token_id_match else None,
+            "token_id": token_id,
+            "tx_hash": tx_hash,
             "tx_url": tx_match.group(1) if tx_match else None,
             "storage_url": storage_match.group(1) if storage_match else None,
+            "storage_uri": storage_uri,
+            "storage_hash": storage_hash,
+            "content_hash": content_hash,
             "contract": inft_address,
+            "proof": snapshot.proof["inft"],
             "output": output[-3000:],
         }
 
