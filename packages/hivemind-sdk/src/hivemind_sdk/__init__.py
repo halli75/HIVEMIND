@@ -27,6 +27,7 @@ from .axl import (
     transcript_stats,
     utc_now_iso,
 )
+from .axl_pool import AXLPoolManager
 from .engine import SwarmEngine
 from .models import (
     AgentArchetype,
@@ -53,6 +54,7 @@ from .providers import (
 
 __all__ = [
     "AXL_MESSAGE_TYPES",
+    "AXLPoolManager",
     "AgentArchetype",
     "AgentState",
     "AxlMessage",

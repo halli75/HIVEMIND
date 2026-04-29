@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .archetypes import DEFAULT_ARCHETYPES
+from .axl_pool import AXLPoolManager
 from .models import (
     AgentArchetype,
     AgentState,
@@ -97,6 +98,9 @@ class SwarmEngine:
         storage_provider: StorageProvider | None = None,
         message_bus: MessageBus | None = None,
         execution_provider: ExecutionProvider | None = None,
+        axl_node_urls: list[str] | None = None,
+        axl_pool_id: str = "hivemind-main",
+        axl_agent_id: str = "hivemind-engine",
     ) -> None:
         if agent_count is not None and count is not None and agent_count != count:
             raise ValueError("pass either agent_count or count, not both")
@@ -138,6 +142,11 @@ class SwarmEngine:
         self._cooldown_until: dict[str, int] = {}
         self._last_action: dict[str, str] = {}
         self._last_pnl_bps: dict[str, float] = {}
+        self._axl_node_urls = list(axl_node_urls or [])
+        self._axl_pool_id = axl_pool_id
+        self._axl_agent_id = axl_agent_id
+        self._axl_pool: AXLPoolManager | None = None
+        self._axl_urgency_boost: dict[str, float] = {}
         self._snapshot = self.inject_scenario(Scenario.neutral())
         if transcript_root is not None:
             self._transcript_recorder = FileTranscriptRecorder(transcript_root)
@@ -356,11 +365,13 @@ class SwarmEngine:
             + max(0.0, -scenario.liquidity_delta) * agent.archetype.liquidity_bias
         )
         cooldown_left = max(0, self._cooldown_until.get(agent.agent_id, 0) - self._tick_index)
+        pool_boost = self._axl_urgency_boost.get(agent.agent_id, 0.0)
         urgency = (
             time_since
             + portfolio_delta
             + axl_signal_strength
             + position_proximity
+            + pool_boost
             - cooldown_left * 0.6
         )
         return urgency
@@ -425,6 +436,14 @@ class SwarmEngine:
         active_scenario = scenario or self._snapshot.scenario
         self._sequence += 1
 
+        await self._axl_pool_drain()
+        for agent_id in list(self._axl_urgency_boost):
+            decayed = self._axl_urgency_boost[agent_id] * 0.5
+            if decayed < 0.05:
+                del self._axl_urgency_boost[agent_id]
+            else:
+                self._axl_urgency_boost[agent_id] = decayed
+
         tier1, tier2, tier3 = self._assign_tiers(active_scenario)
 
         semaphore = asyncio.Semaphore(TIER1_SEMAPHORE)
@@ -478,6 +497,7 @@ class SwarmEngine:
         )
         self._snapshot = snapshot
 
+        await self._axl_pool_publish_tier1(active_scenario, tier1, tier1_results)
         self._print_tick_summary(self._tick_index, tier1, tier1_results, tier2, tier2_results, tier3, tier3_results)
         return snapshot
 
@@ -488,6 +508,83 @@ class SwarmEngine:
         for _ in range(ticks):
             snapshot = await self.tick(scenario)
         return snapshot
+
+    async def _axl_pool_ensure(self) -> AXLPoolManager | None:
+        if not self._axl_node_urls:
+            return None
+        if self._axl_pool is None:
+            pool = AXLPoolManager(
+                node_urls=self._axl_node_urls,
+                pool_id=self._axl_pool_id,
+                agent_id=self._axl_agent_id,
+            )
+            await pool.connect()
+            self._axl_pool = pool
+        return self._axl_pool
+
+    async def _axl_pool_drain(self) -> None:
+        pool = await self._axl_pool_ensure()
+        if pool is None:
+            return
+        messages = await pool.receive(timeout=0.0)
+        for message in messages:
+            if message.type != "MARKET_SIGNAL":
+                continue
+            target = (
+                message.payload.get("target_agent_id")
+                or message.payload.get("agent_id")
+            )
+            strength = float(message.payload.get("signal_strength", 1.0) or 1.0)
+            if target:
+                self._axl_urgency_boost[str(target)] = (
+                    self._axl_urgency_boost.get(str(target), 0.0) + strength
+                )
+            else:
+                for agent in self._agents:
+                    self._axl_urgency_boost[agent.agent_id] = (
+                        self._axl_urgency_boost.get(agent.agent_id, 0.0) + strength * 0.1
+                    )
+
+    async def _axl_pool_publish_tier1(
+        self,
+        scenario: Scenario,
+        tier1: list["_AgentIdentity"],
+        tier1_results: list[AgentState],
+    ) -> None:
+        pool = await self._axl_pool_ensure()
+        if pool is None:
+            return
+        for agent, state in zip(tier1, tier1_results):
+            try:
+                await pool.broadcast(
+                    "TRADE_INTENT",
+                    {
+                        "agent_id": agent.agent_id,
+                        "archetype": agent.archetype.name,
+                        "scenario_id": scenario.scenario_id,
+                        "action": state.action,
+                        "confidence": state.confidence,
+                        "size_usd_est": round(200_000 + scenario.volatility * 600_000, 2),
+                    },
+                )
+                await pool.broadcast(
+                    "INFERENCE_RESULT",
+                    {
+                        "agent_id": agent.agent_id,
+                        "scenario_id": scenario.scenario_id,
+                        "action": state.action,
+                        "confidence": state.confidence,
+                        "score": state.score,
+                        "aiq": state.aiq,
+                    },
+                )
+            except (ConnectionError, OSError):
+                continue
+
+    async def aclose(self) -> None:
+        if self._axl_pool is not None:
+            await self._axl_pool.disconnect()
+            self._axl_pool = None
 
     @staticmethod
     def _print_tick_summary(

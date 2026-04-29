@@ -1,0 +1,20 @@
+{
+  "market_signals_per_run": 1000,
+  "pool_id": "hivemind-bench",
+  "results": [
+    {
+      "avg_rss_kb": 25184,
+      "duration_s": 0.076,
+      "failed_nodes": [],
+      "max_rss_kb": 25936,
+      "messages_received": 2000,
+      "messages_sent": 2000,
+      "node_count": 2,
+      "p50_latency_ms": 31.115,
+      "p95_latency_ms": 66.946,
+      "throughput_msgs_per_s": 26309.05
+    }
+  ],
+  "schema": "hivemind.axl.benchmark.v1",
+  "trade_intents_per_run": 1000
+}

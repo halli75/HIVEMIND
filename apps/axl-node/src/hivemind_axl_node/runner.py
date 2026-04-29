@@ -288,6 +288,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     failure.add_argument("--port", type=int, default=DEFAULT_PORT + 1)
     failure.add_argument("--transcript", type=Path, default=Path("runs/axl/failure-smoke.jsonl"))
     failure.add_argument("--messages", type=int, default=20)
+
+    node = subparsers.add_parser("start-node", help="Run a multi-agent AXL pool node.")
+    node.add_argument("--host", default=DEFAULT_HOST)
+    node.add_argument("--port", type=int, required=True)
+    node.add_argument("--node-id", required=True)
+    node.add_argument("--pool-id", default=None)
+    node.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)
 
 
@@ -314,5 +321,21 @@ def main(argv: list[str] | None = None) -> int:
                 transcript=args.transcript,
                 messages=args.messages,
             )
+        )
+    if args.command == "start-node":
+        from .start_node import main as start_node_main
+
+        return start_node_main(
+            [
+                "--host",
+                args.host,
+                "--port",
+                str(args.port),
+                "--node-id",
+                args.node_id,
+                *(["--pool-id", args.pool_id] if args.pool_id else []),
+                "--log-level",
+                args.log_level,
+            ]
         )
     return 2
