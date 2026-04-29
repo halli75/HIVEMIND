@@ -284,6 +284,34 @@ def test_mint_reports_storage_unavailable_without_generic_500(monkeypatch) -> No
     assert "minting did not start" in detail["message"]
 
 
+def test_mint_reports_storage_upload_failed_for_flow_revert(monkeypatch) -> None:
+    class FailedMintProcess:
+        returncode = 1
+
+        async def communicate(self):
+            return (
+                b"Storage upload attempt 1/8 ...\n"
+                b"First selected node status : { timeout: 30000 }\n"
+                b"Error: 0G Storage upload failed: Error: storage_upload_failed: "
+                b"Failed to submit transaction: ProviderError: execution reverted",
+                b"",
+            )
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return FailedMintProcess()
+
+    monkeypatch.setenv("INFT_CONTRACT_ADDRESS", "0x0000000000000000000000000000000000000001")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    client = _client()
+    response = client.post("/mint")
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail["status"] == "storage_upload_failed"
+    assert "storage fee transaction failed" in detail["message"]
+
+
 def test_mint_success_updates_state_inft_proof(monkeypatch) -> None:
     class MintedProcess:
         returncode = 0

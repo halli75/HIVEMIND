@@ -167,8 +167,18 @@ def _looks_like_storage_unavailable(output: str) -> bool:
             "503",
             "502",
             "504",
-            "timeout",
-            "timed out",
+        )
+    )
+
+
+def _looks_like_storage_upload_failed(output: str) -> bool:
+    normalized = output.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "storage_upload_failed",
+            "failed to submit transaction",
+            "providererror: execution reverted",
         )
     )
 
@@ -402,6 +412,16 @@ def create_app(
                         "status": "storage_unavailable",
                         "message": "0G Storage upload is unavailable; encryption succeeded but minting did not start.",
                         "retry": "Retry POST /mint after the 0G Storage testnet recovers.",
+                        "output_tail": output[-3000:],
+                    },
+                )
+            if _looks_like_storage_upload_failed(output):
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "status": "storage_upload_failed",
+                        "message": "0G Storage upload reached the storage network, but the storage fee transaction failed before minting.",
+                        "retry": "Verify the selected 0G Storage indexer/Flow contract and retry before minting.",
                         "output_tail": output[-3000:],
                     },
                 )

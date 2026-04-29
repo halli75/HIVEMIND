@@ -246,3 +246,21 @@
 - `/mint` fetched winner `agent-014`, encrypted with AES-256-GCM, wrote the local demo key under ignored `contracts/runs/inft-keys/`, then stopped before chain mint because 0G Storage returned HTTP 503 for all 4 retry attempts.
 - The patched `/mint` response is HTTP 503 with `detail.status="storage_unavailable"` instead of a generic 500.
 - Uniswap quote-only rehearsal succeeded with `0.001 WETH -> 8.75588 USDC`; swap script refused to sign because `HIVEMIND_ALLOW_TESTNET_SWAP=true` was not enabled.
+
+## Phase 3 Turbo 0G Storage Retry
+
+- [x] Restart the API with `ZERO_G_STORAGE_INDEXER_URL=https://indexer-storage-testnet-turbo.0g.ai`.
+- [x] Set extended retry controls: `MINT_STORAGE_MAX_ATTEMPTS=8`, `MINT_STORAGE_RETRY_BASE_MS=3000`.
+- [x] Verify required env vars exist without printing secrets.
+- [x] Verify deployer public address and OG testnet balance through `ZERO_G_RPC_URL`.
+- [x] Retry `POST /mint` and capture either token/storage proof or sanitized failure evidence.
+- [x] Update docs/tasks and commit only if tracked code or docs change.
+
+## Phase 3 Turbo 0G Storage Retry Review
+
+- Evidence saved under ignored `runs/proof-turbo-20260429-165426/`.
+- Required env vars were present, and the deployer wallet `0xb9123E486471D366210318F9eEB80B934e770caA` had `1.990395423983191992 OG` on Galileo chain `16602`.
+- Turbo indexer reached storage nodes and prepared upload data, so this was not the same standard-indexer HTTP 503 failure.
+- Turbo failure: `Failed to submit transaction: ProviderError: execution reverted` on Flow address `0x22e03a6a89b950f1c82ec5e74f8eca321a105296`.
+- Static call probe against `flow.submit` reverted with exact and 10 percent padded fee, so the failure is not obviously a missing balance or underpaid storage-fee issue.
+- Added `docs/integrations/0g-escalation.md` with sanitized evidence for 0G support.
