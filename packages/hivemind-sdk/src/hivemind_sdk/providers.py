@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -67,6 +68,30 @@ class InferenceProvider(Protocol):
         jitter: float,
     ) -> AgentState:
         """Evaluate a single agent for a scenario."""
+
+
+@dataclass(frozen=True)
+class HybridInferenceMetrics:
+    mode: str
+    model: str
+    top_n: int
+    attempted_real_count: int
+    successful_real_count: int
+    fallback_count: int
+    avg_latency_ms: float | None
+    last_error: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "model": self.model,
+            "top_n": self.top_n,
+            "attempted_real_count": self.attempted_real_count,
+            "successful_real_count": self.successful_real_count,
+            "fallback_count": self.fallback_count,
+            "avg_latency_ms": self.avg_latency_ms,
+            "last_error": self.last_error,
+        }
 
 
 class StorageProvider(Protocol):
@@ -266,6 +291,31 @@ def _build_inference_prompt(archetype: "AgentArchetype", scenario: "Scenario") -
     )
 
 
+def _parse_model_json(content: str) -> dict[str, Any]:
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        value = json.loads(text[start : end + 1])
+    if not isinstance(value, dict):
+        raise ValueError("model response JSON must be an object")
+    return value
+
+
+def _safe_error(exc: Exception, token: str) -> str:
+    message = f"{type(exc).__name__}: {exc}"
+    if token:
+        message = message.replace(token, "[redacted]")
+    return message[:240]
+
+
 class ZeroGComputeInferenceProvider:
     def __init__(
         self,
@@ -280,6 +330,20 @@ class ZeroGComputeInferenceProvider:
         self._model = model
         self._timeout = timeout
         self._fallback = LocalInferenceProvider()
+        self._last_error: str | None = None
+        self._last_latency_ms: float | None = None
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    @property
+    def last_latency_ms(self) -> float | None:
+        return self._last_latency_ms
 
     def evaluate_agent(
         self,
@@ -290,6 +354,7 @@ class ZeroGComputeInferenceProvider:
         jitter: float,
     ) -> "AgentState":
         prompt = _build_inference_prompt(archetype, scenario)
+        started = time.perf_counter()
         try:
             resp = None
             for attempt in range(4):
@@ -303,19 +368,22 @@ class ZeroGComputeInferenceProvider:
                     },
                     timeout=self._timeout,
                 )
-                if resp.status_code == 429:
+                if getattr(resp, "status_code", None) == 429:
                     time.sleep(2.0 * (attempt + 1))
                     continue
                 break
             resp.raise_for_status()
-            raw = json.loads(resp.json()["choices"][0]["message"]["content"])
+            raw = _parse_model_json(resp.json()["choices"][0]["message"]["content"])
             action_str = str(raw["action"]).lower()
             if action_str not in {"buy", "sell", "hold"}:
                 raise ValueError(f"unexpected action: {action_str}")
             action = cast("Action", action_str)
             confidence = float(raw["confidence"])
             confidence = max(0.0, min(1.0, confidence))
-        except Exception:
+            self._last_error = None
+        except Exception as exc:
+            self._last_latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            self._last_error = _safe_error(exc, self._token)
             state = self._fallback.evaluate_agent(
                 agent_id=agent_id, archetype=archetype, scenario=scenario, jitter=jitter
             )
@@ -328,11 +396,12 @@ class ZeroGComputeInferenceProvider:
                 pnl_bps=state.pnl_bps,
                 aiq=state.aiq,
                 score=state.score,
-                rationale=state.rationale,
+                rationale=f"0G fallback: {self._last_error}; {state.rationale}",
                 inference_source="local_fallback",
                 model="",
             )
 
+        self._last_latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
         aiq = aiq_for(archetype, scenario, confidence, jitter)
         pnl_bps = pnl_bps_for(action, archetype, scenario, jitter)
         score = score_for(confidence, pnl_bps, aiq, archetype.tier)
@@ -345,7 +414,7 @@ class ZeroGComputeInferenceProvider:
             pnl_bps=pnl_bps,
             aiq=aiq,
             score=score,
-            rationale=f"0G/{self._model}: {archetype.name} → {action} (conf={confidence:.2f})",
+            rationale=f"0G/{self._model}: {archetype.name} -> {action} (conf={confidence:.2f})",
             inference_source="0g_compute",
             model=self._model,
         )
@@ -354,10 +423,27 @@ class ZeroGComputeInferenceProvider:
 class HybridInferenceProvider:
     """Local first pass for all agents; re-evaluates top-N with real 0G Compute."""
 
-    def __init__(self, *, real: ZeroGComputeInferenceProvider, top_n: int = 10) -> None:
+    def __init__(
+        self, *, real: ZeroGComputeInferenceProvider, top_n: int = 10, max_workers: int = 2
+    ) -> None:
         self._local = LocalInferenceProvider()
         self._real = real
-        self._top_n = top_n
+        self._top_n = max(0, top_n)
+        self._max_workers = max(1, max_workers)
+        self._last_metrics = HybridInferenceMetrics(
+            mode="0g_compute",
+            model=real.model,
+            top_n=self._top_n,
+            attempted_real_count=0,
+            successful_real_count=0,
+            fallback_count=0,
+            avg_latency_ms=None,
+            last_error=None,
+        )
+
+    @property
+    def metrics(self) -> HybridInferenceMetrics:
+        return self._last_metrics
 
     def evaluate_agent(
         self,
@@ -381,16 +467,37 @@ class HybridInferenceProvider:
         top = sorted_states[: self._top_n]
         rest = sorted_states[self._top_n :]
 
-        def refine_one(state: "AgentState") -> "AgentState":
+        def refine_one(state: "AgentState") -> tuple["AgentState", float]:
             archetype = archetypes[state.agent_id]
-            return self._real.evaluate_agent(
+            started = time.perf_counter()
+            refined = self._real.evaluate_agent(
                 agent_id=state.agent_id,
                 archetype=archetype,
                 scenario=scenario,
                 jitter=0.0,
             )
+            latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            return refined, latency_ms
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            refined = list(executor.map(refine_one, top))
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            results = list(executor.map(refine_one, top))
 
+        refined = [state for state, _latency in results]
+        latencies = [latency for _state, latency in results]
+        successful = sum(1 for state in refined if state.inference_source == "0g_compute")
+        fallback = len(refined) - successful
+        last_error = None
+        for state in refined:
+            if state.inference_source == "local_fallback" and state.rationale.startswith("0G fallback: "):
+                last_error = state.rationale.removeprefix("0G fallback: ").split("; ", 1)[0]
+        self._last_metrics = HybridInferenceMetrics(
+            mode="0g_compute",
+            model=self._real.model,
+            top_n=self._top_n,
+            attempted_real_count=len(refined),
+            successful_real_count=successful,
+            fallback_count=fallback,
+            avg_latency_ms=round(sum(latencies) / len(latencies), 3) if latencies else None,
+            last_error=last_error,
+        )
         return refined + rest

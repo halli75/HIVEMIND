@@ -95,8 +95,13 @@ class SwarmEngine:
 
         self._seed = seed
         self._replay = SeedReplay.from_directory(seed_snapshot_dir)
-        self._run_mode: RunMode = run_mode or ("local_axl" if axl_transcript_path else "mock")
         self._inference_provider = inference_provider or LocalInferenceProvider()
+        local_axl_enabled = bool(axl_transcript_path) or isinstance(message_bus, LocalAxlMessageBus)
+        live_0g_enabled = isinstance(self._inference_provider, HybridInferenceProvider)
+        self._run_mode: RunMode = run_mode or self._compose_run_mode(
+            local_axl=local_axl_enabled,
+            live_0g=live_0g_enabled,
+        )
         self._storage_provider = storage_provider or LocalStorageProvider(replay=self._replay)
         self._message_bus = message_bus or (
             LocalAxlMessageBus(transcript_path=axl_transcript_path)
@@ -124,6 +129,16 @@ class SwarmEngine:
     @property
     def run_mode(self) -> RunMode:
         return self._run_mode
+
+    @staticmethod
+    def _compose_run_mode(*, local_axl: bool, live_0g: bool) -> RunMode:
+        if local_axl and live_0g:
+            return "local_axl+live_0g"
+        if local_axl:
+            return "local_axl"
+        if live_0g:
+            return "live_0g"
+        return "mock"
 
     def inject_scenario(self, scenario: Scenario) -> SwarmSnapshot:
         self._sequence += 1
@@ -262,16 +277,20 @@ class SwarmEngine:
             state_digest=state_digest,
         )
         _is_real = isinstance(self._inference_provider, HybridInferenceProvider)
-        _real_count = sum(1 for s in agent_states if s.inference_source == "0g_compute") if _is_real else 0
-        _model = self._inference_provider._real._model if _is_real else "local-deterministic"
+        _metrics = self._inference_provider.metrics if _is_real else None
+        _metric_payload = _metrics.to_dict() if _metrics else {}
         return IntegrationEnvelope(
             zero_g_compute={
-                "mode": "0g_compute" if _is_real else ("seed_replay" if self._run_mode == "seed_replay" else "mock"),
+                "mode": "0g_compute" if _is_real else "mock",
                 "request_id": f"0g-compute-{self._sequence:04d}",
-                "inference_calls": len(agent_states),
-                "model_tier": _model,
-                "real_inference_count": _real_count,
-                "fallback_count": (self._inference_provider._top_n - _real_count) if _is_real else 0,
+                "evaluated_agents": len(agent_states),
+                "inference_calls": _metric_payload.get("attempted_real_count", 0),
+                "model_tier": _metric_payload.get("model", "local-deterministic"),
+                "real_inference_count": _metric_payload.get("successful_real_count", 0),
+                "fallback_count": _metric_payload.get("fallback_count", 0),
+                "top_n": _metric_payload.get("top_n", 0),
+                "avg_latency_ms": _metric_payload.get("avg_latency_ms"),
+                "last_error": _metric_payload.get("last_error"),
             },
             zero_g_storage=storage,
             gensyn_axl=axl,

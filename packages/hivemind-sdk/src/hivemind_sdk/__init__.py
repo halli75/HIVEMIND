@@ -27,6 +27,7 @@ from .models import (
 from .providers import (
     ExecutionProvider,
     HybridInferenceProvider,
+    HybridInferenceMetrics,
     InferenceProvider,
     LocalAxlMessageBus,
     LocalInferenceProvider,
@@ -46,6 +47,7 @@ __all__ = [
     "DEFAULT_ARCHETYPES",
     "ExecutionProvider",
     "HybridInferenceProvider",
+    "HybridInferenceMetrics",
     "InferenceProvider",
     "IntegrationEnvelope",
     "LeaderboardEntry",
