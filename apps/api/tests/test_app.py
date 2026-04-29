@@ -45,6 +45,14 @@ def test_rest_scenario_updates_state_leaderboard_and_tier_metrics() -> None:
 
     metrics = client.get("/metrics/tiers").json()
     assert sum(metric["inference_calls"] for metric in metrics["tier_metrics"]) == 8
+    # Token-bucket fields surfaced for the dashboard rate-limit warning.
+    assert metrics["token_bucket_capacity"] == 10
+    assert metrics["token_bucket_refill_rate"] == 10.0
+    assert isinstance(metrics["token_bucket_remaining"], int)
+    assert 0 <= metrics["token_bucket_remaining"] <= 10
+    assert metrics["rate_limited"] is False
+    assert metrics["rate_limited_count"] == 0
+    assert metrics["rate_limited_agents"] == []
 
 
 def test_websocket_streams_initial_state_and_accepts_scenario_injection() -> None:

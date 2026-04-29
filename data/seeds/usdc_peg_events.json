@@ -1,0 +1,26 @@
+[
+  {
+    "timestamp": "2026-02-04T14:22:00Z",
+    "peg_delta": -0.0042,
+    "duration_minutes": 38,
+    "trigger": "circle_bank_exposure_rumor"
+  },
+  {
+    "timestamp": "2026-02-19T08:55:00Z",
+    "peg_delta": -0.0091,
+    "duration_minutes": 142,
+    "trigger": "treasury_redemption_pause"
+  },
+  {
+    "timestamp": "2026-03-11T19:07:00Z",
+    "peg_delta": 0.0038,
+    "duration_minutes": 27,
+    "trigger": "stablecoin_demand_spike_apac"
+  },
+  {
+    "timestamp": "2026-04-02T03:14:00Z",
+    "peg_delta": -0.0055,
+    "duration_minutes": 64,
+    "trigger": "perp_dex_cascade_liquidation"
+  }
+]

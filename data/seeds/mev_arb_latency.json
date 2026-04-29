@@ -1,0 +1,32 @@
+[
+  {
+    "opportunity_id": "arb-2026-04-21-001",
+    "spread_bps": 14.2,
+    "latency_ms": 88,
+    "captured": true
+  },
+  {
+    "opportunity_id": "arb-2026-04-21-002",
+    "spread_bps": 9.6,
+    "latency_ms": 142,
+    "captured": false
+  },
+  {
+    "opportunity_id": "arb-2026-04-23-014",
+    "spread_bps": 22.8,
+    "latency_ms": 61,
+    "captured": true
+  },
+  {
+    "opportunity_id": "arb-2026-04-25-031",
+    "spread_bps": 7.1,
+    "latency_ms": 105,
+    "captured": false
+  },
+  {
+    "opportunity_id": "arb-2026-04-26-007",
+    "spread_bps": 33.4,
+    "latency_ms": 48,
+    "captured": true
+  }
+]

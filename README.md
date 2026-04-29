@@ -1,5 +1,7 @@
 # HIVEMIND
 
+![HIVEMIND Architecture](docs/architecture.svg)
+
 DeFi Swarm Intelligence Engine for the ETHGlobal OpenAgents hackathon.
 
 HIVEMIND simulates a DeFi swarm, crystallizes the winning strategy into an iNFT-backed agent, and executes a real Uniswap trade.
@@ -22,7 +24,149 @@ Phase 2 local AXL proof is live:
 - `data`: deterministic seed snapshots for local simulation.
 - `docs`: architecture and integration notes for 0G, Gensyn AXL, and Uniswap.
 
+## AXL Benchmark Results
+
+Local Gensyn AXL coordinator benchmarks across 2- and 5-node clusters, sending 1,000 trade-intent and 1,000 market-signal messages per run (4,000 total deliveries, 2,000 sends per cluster). Source: [`apps/axl-node/benchmark_results.json`](apps/axl-node/benchmark_results.json).
+
+| Nodes | Messages Sent | Messages Received | Throughput (msgs/sec) | p50 Latency (ms) | p95 Latency (ms) | Duration (s) |
+|------:|--------------:|------------------:|----------------------:|-----------------:|-----------------:|-------------:|
+| 2     | 2,000         | 2,000             | 17,770                | 15.28            | 24.83            | 0.113        |
+| 5     | 2,000         | 2,000             | 17,707                | 17.40            | 27.01            | 0.113        |
+
+**What this means in plain English:** the swarm can move ~17,700 messages per second end-to-end between AXL nodes, with the typical message arriving in under 20 milliseconds. That is fast enough for agents to coordinate trades in real time without the local AXL transport being the bottleneck.
+
+## hivemind-sdk — OpenClaw-Inspired Architecture
+
+hivemind-sdk's architecture is directly inspired by OpenClaw's agent framework. AgentArchetype mirrors OpenClaw's pluggable Skills system — subclass to define a new DeFi actor persona, register it with SwarmEngine, and it participates in the swarm immediately. SwarmEngine mirrors OpenClaw's Gateway — a single control plane orchestrating all agent instances, their memory state, 0G Compute inference scheduling, and Gensyn AXL communication pools. ScenarioInjector mirrors OpenClaw's session/messaging layer — the interface through which external events enter the system and propagate to all active instances. hivemind-sdk is OpenClaw's architectural DNA, applied to a DeFi-native multi-agent simulation context, deployed on 0G Compute and Storage infrastructure.
+
+| OpenClaw Concept | hivemind-sdk Parallel |
+|---|---|
+| Skills system — drop a SKILL.md in, agent gains that capability | AgentArchetype — subclass to define a DeFi actor persona, register with SwarmEngine |
+| Gateway — single control plane for all agents, sessions, channels | SwarmEngine — orchestrates all agent instances, inference scheduling, AXL routing |
+| Session model — persistent context per user/channel | Per-agent KV Store (live state) + Log Store (history) |
+| Extensions — modular add-ons to core gateway behavior | ScenarioInjector + ScoringEngine — modular components extending SwarmEngine |
+
 ## Quickstart
+
+Five commands take you from a fresh clone to a running PanicSeller swarm:
+
+```bash
+git clone https://github.com/<your-org>/HIVEMIND.git
+cd HIVEMIND
+pip install -e packages/hivemind-sdk
+cp .env.example .env
+HIVEMIND_USE_MOCK_INFERENCE=true python examples/panic_seller.py
+```
+
+`examples/panic_seller.py`:
+
+```python
+from hivemind_sdk import AgentArchetype, SwarmEngine, ScenarioInjector
+
+
+class PanicSeller(AgentArchetype):
+    archetype_name = "panic_seller"
+
+    def decide(self, market_state, memory) -> dict:
+        if market_state["price_delta_pct"] < -0.05:
+            return {
+                "action": "sell",
+                "amount": memory["portfolio"] * 0.5,
+                "confidence": 0.82,
+                "rationale": "panic_seller: fast drawdown, cut risk",
+            }
+        return {"action": "hold", "confidence": 0.55, "rationale": "panic_seller: no drawdown trigger"}
+
+    def heuristic(self, market_state, memory) -> dict:
+        if market_state["price_delta_pct"] < -0.10:
+            return {
+                "action": "sell",
+                "amount": memory["portfolio"] * 0.3,
+                "confidence": 0.74,
+                "rationale": "panic_seller: heuristic drawdown trigger",
+            }
+        return {"action": "hold", "confidence": 0.5, "rationale": "panic_seller: hold band"}
+
+
+engine = SwarmEngine(archetypes=[PanicSeller], count=100)
+injector = ScenarioInjector(engine)
+engine.run()
+injector.inject("20% ETH price drop over 4 hours")
+```
+
+## SDK Public API
+
+The SDK is the import surface external builders depend on. Everything below is exported from `hivemind_sdk`.
+
+### AgentArchetype
+
+Base class for every agent persona in the swarm.
+
+- **Subclass** to define a DeFi actor (e.g., `PanicSeller`, `Whale`, `Degen`).
+- **Required:** override at least one of `decide`, `heuristic`, or `mock_decide`. Each takes `(market_state: dict, memory: dict)` and returns `{"action": str, "confidence": float, "rationale": str, ...}`.
+- **Optional class attribute:** `archetype_name` — sets the agent's name; falls back to the lowercased class name.
+- **Optional constructor params:** `tier` (1/2/3), `risk_appetite`, `momentum_bias`, `liquidity_bias`, `hedge_bias`, `aiq_base` — all in `[0.0, 1.0]`.
+- **Optional method:** `on_signal(message)` — invoked when an AXL message is delivered to this agent.
+
+### SwarmEngine
+
+Main orchestrator — holds the agent roster, evaluates them against scenarios, and emits ranked snapshots.
+
+Key constructor params:
+
+- `archetypes`: list of `AgentArchetype` subclasses **or** instances.
+- `count` / `agent_count`: number of agents to spawn (default 24).
+- `seed`: deterministic seed for jitter.
+- `axl_node_urls`: optional list of `tcp://host:port` strings to enable real P2P messaging via `AXLPoolManager`.
+- `axl_transcript_path`: optional path that switches the engine into local-AXL transcript mode.
+- `inference_provider`, `storage_provider`, `message_bus`, `execution_provider`: pluggable adapters for 0G Compute, 0G Storage, Gensyn AXL, and Uniswap.
+
+Key methods:
+
+- `engine.run(ticks=1)` — synchronous wrapper; runs N ticks and returns the final `SwarmSnapshot`.
+- `engine.run_async(ticks=1)` — same, awaitable.
+- `engine.tick(scenario=None)` — async; advances one tier-1/2/3 tick.
+- `engine.inject_scenario(scenario)` — synchronous; evaluates every agent against a single `Scenario`.
+- `engine.aclose()` — release the AXL pool, if connected.
+
+### ScenarioInjector
+
+Natural-language adapter for `engine.inject_scenario`.
+
+```python
+injector = ScenarioInjector(engine)
+injector.inject("20% ETH price drop over 4 hours")
+injector.inject("12% SOL rally over 30 minutes")
+```
+
+The parser extracts asset (any uppercase ticker), direction (drop / rally / flat), magnitude (any `N%` token), and duration (`seconds|minutes|hours|days|weeks`). It builds a `Scenario` and forwards to the engine. `injector.parse(prompt)` returns the `Scenario` without injecting.
+
+### ScoringEngine
+
+Pluggable scoring surface — wraps the same `confidence × pnl × aiq × tier` rubric the engine uses internally so external callers can rank arbitrary agent states the same way the leaderboard does. Drop in a custom subclass to change the formula without touching the engine.
+
+### AXLPoolManager
+
+Multi-node P2P pool client for Gensyn AXL.
+
+```python
+from hivemind_sdk import AXLPoolManager
+
+pool = AXLPoolManager(
+    node_urls=["tcp://localhost:7001", "tcp://localhost:7002"],
+    pool_id="hivemind-main",
+    agent_id="agent-001",
+)
+await pool.connect()
+await pool.broadcast("TRADE_INTENT", {"action": "buy", "size_usd": 250_000})
+await pool.send("agent-002", "MARKET_SIGNAL", {"signal_strength": 0.8})
+inbox = await pool.receive(timeout=1.0)
+await pool.disconnect()
+```
+
+Connects to every node in parallel, falls back gracefully on dead nodes, dedupes incoming messages by id, and exposes `message_count` for observability. `SwarmEngine(axl_node_urls=[...])` consumes it transparently.
+
+## Local Development
 
 Use `npm.cmd` on Windows PowerShell if `npm.ps1` is blocked by execution policy.
 

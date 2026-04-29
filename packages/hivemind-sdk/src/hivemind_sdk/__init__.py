@@ -1,6 +1,20 @@
-"""Local-first SDK for deterministic HIVEMIND swarm simulations."""
+"""Local-first SDK for deterministic HIVEMIND swarm simulations.
+
+Note: ``CrystallizationPipeline`` requires the optional ``web3`` and
+``cryptography`` packages. Install them with ``pip install hivemind-sdk[crystallize]``
+or directly: ``pip install web3 cryptography``.
+"""
 
 from .archetypes import DEFAULT_ARCHETYPES, archetype_by_name
+from .crystallization import (
+    CrystallizationPipeline,
+    LocalStorageUploadProvider,
+    MockWeb3Provider,
+    Storage0GProvider,
+    Web3MintProvider,
+    Web3Provider,
+)
+from .scoring import ScoringEngine
 from .axl import (
     AXL_MESSAGE_TYPES,
     AxlMessage,
@@ -13,7 +27,8 @@ from .axl import (
     transcript_stats,
     utc_now_iso,
 )
-from .engine import SwarmEngine
+from .axl_pool import AXLPoolManager
+from .engine import SwarmEngine, TokenBucket
 from .models import (
     AgentArchetype,
     AgentState,
@@ -24,26 +39,33 @@ from .models import (
     SwarmSnapshot,
     TierMetric,
 )
+from .scenario import ScenarioInjector
 from .providers import (
     ExecutionProvider,
     HybridInferenceProvider,
     HybridInferenceMetrics,
     InferenceProvider,
     LocalAxlMessageBus,
+    LocalExecutionProvider,
     LocalInferenceProvider,
     MessageBus,
+    MockInferenceProvider,
     SeedReplay,
     StorageProvider,
+    UniswapExecutionProvider,
     ZeroGComputeInferenceProvider,
+    use_mock_inference,
 )
 
 __all__ = [
     "AXL_MESSAGE_TYPES",
+    "AXLPoolManager",
     "AgentArchetype",
     "AgentState",
     "AxlMessage",
     "AxlMessageType",
     "AxlTranscriptStats",
+    "CrystallizationPipeline",
     "DEFAULT_ARCHETYPES",
     "ExecutionProvider",
     "HybridInferenceProvider",
@@ -52,15 +74,26 @@ __all__ = [
     "IntegrationEnvelope",
     "LeaderboardEntry",
     "LocalAxlMessageBus",
+    "LocalExecutionProvider",
     "LocalInferenceProvider",
+    "LocalStorageUploadProvider",
     "MessageBus",
+    "MockInferenceProvider",
+    "MockWeb3Provider",
     "RunMode",
     "Scenario",
+    "ScenarioInjector",
+    "ScoringEngine",
     "SeedReplay",
+    "Storage0GProvider",
     "StorageProvider",
     "SwarmEngine",
     "SwarmSnapshot",
     "TierMetric",
+    "TokenBucket",
+    "UniswapExecutionProvider",
+    "Web3MintProvider",
+    "Web3Provider",
     "ZeroGComputeInferenceProvider",
     "append_jsonl",
     "archetype_by_name",
@@ -68,5 +101,6 @@ __all__ = [
     "parse_timestamp",
     "read_transcript",
     "transcript_stats",
+    "use_mock_inference",
     "utc_now_iso",
 ]

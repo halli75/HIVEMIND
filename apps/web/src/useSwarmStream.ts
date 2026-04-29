@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AgentStatus,
   AgentTier,
+  Archetype,
+  AxlEdgeMessage,
   ConnectionBadge,
+  InferenceBudget,
   LeaderboardEntry,
   RunTranscript,
   ScenarioRequest,
@@ -11,6 +14,19 @@ import type {
   SwarmStreamState,
 } from "./types";
 import { useMockSwarm } from "./useMockSwarm";
+
+const KNOWN_ARCHETYPES: Archetype[] = [
+  "whale",
+  "degen",
+  "lp_provider",
+  "arbitrageur",
+  "governance_voter",
+  "stablecoin_arb",
+  "mev_searcher",
+];
+
+const archetypeFromApi = (value: string): Archetype =>
+  (KNOWN_ARCHETYPES as string[]).includes(value) ? (value as Archetype) : "degen";
 
 type ApiAgent = {
   agent_id: string;
@@ -175,8 +191,27 @@ const expandVisualAgents = (
       score: clamp(source.score + scorePulse, 0, 100),
       confidence: source.confidence,
       strategy: `${source.archetype} / ${source.action}`,
+      archetype: archetypeFromApi(source.archetype),
     };
   });
+};
+
+const extractAxlMessages = (
+  gensynAxl: Record<string, unknown> | undefined,
+  sequence: number,
+): AxlEdgeMessage[] => {
+  const transcript = gensynAxl?.["transcript"];
+  if (!Array.isArray(transcript)) return [];
+  return transcript
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+    .map((entry, index) => {
+      const id = typeof entry["id"] === "string" ? (entry["id"] as string) : `axl-${sequence}-${index}`;
+      const source = typeof entry["source_node"] === "string" ? (entry["source_node"] as string) : "";
+      const target = typeof entry["target"] === "string" ? (entry["target"] as string) : "";
+      const messageType = typeof entry["type"] === "string" ? (entry["type"] as string) : "MESSAGE";
+      return { id, source, target, type: messageType, tick: sequence };
+    })
+    .filter((message) => message.source.length > 0 && message.target.length > 0);
 };
 
 const scenarioFromText = (scenarioText: string): ScenarioRequest => {
@@ -289,7 +324,32 @@ function mapSnapshot(snapshot: ApiSnapshot, visualAgentCount: number) {
     uniswapSwapReceipt: metrics.latestSwapReceipt,
   };
 
-  return { agents, metrics, leaderboard, transcript, tick: snapshot.sequence, integrations };
+  const axlMessages = extractAxlMessages(gensynAxl, snapshot.sequence);
+
+  const inferenceCallsThisTick = tierMetrics.reduce((sum, tier) => sum + tier.inference_calls, 0);
+  const aiqOccupied = tierMetrics.reduce(
+    (sum, tier) => sum + (tier.aiq_size > 0 ? Math.min(10, Math.round(tier.aiq_size * 10)) : 0),
+    0,
+  );
+  const inferenceBudget: InferenceBudget = {
+    callsThisTick: inferenceCallsThisTick,
+    cap: 10,
+    callsPerTickAvg: snapshot.sequence > 0 ? metrics.zeroGInferenceCalls / Math.max(1, snapshot.sequence) : 0,
+    aiqSlotsActive: Math.min(10, aiqOccupied),
+    aiqSlotsTotal: 10,
+  };
+
+  return {
+    agents,
+    metrics,
+    leaderboard,
+    transcript,
+    tick: snapshot.sequence,
+    integrations,
+    axlMessages,
+    totalAgentCount: snapshot.agents.length,
+    inferenceBudget,
+  };
 }
 
 const mockTranscript = (scenario: string, metrics: SwarmMetrics): RunTranscript => ({
@@ -481,6 +541,7 @@ export function useSwarmStream(agentCount: number, scenario: string): SwarmStrea
     mode,
     badges: badgesFor("mock"),
     transcript: mockTranscript(scenario, mock.metrics),
+    totalAgentCount: mock.agents.length,
     isRunningScenario,
     error,
     runScenario,

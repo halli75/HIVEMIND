@@ -3,7 +3,17 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-Action = Literal["buy", "sell", "hold", "provide_liquidity", "hedge"]
+Action = Literal[
+    "buy",
+    "sell",
+    "hold",
+    "provide_liquidity",
+    "hedge",
+    "rebalance",
+    "arb",
+    "vote",
+    "front_run",
+]
 RunMode = Literal[
     "mock",
     "local_axl",
@@ -20,34 +30,89 @@ def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
-@dataclass(frozen=True)
 class AgentArchetype:
-    """Strategy profile used to instantiate deterministic mock agents."""
+    """Strategy profile + decision surface for swarm agents.
 
-    name: str
-    tier: int
-    risk_appetite: float
-    momentum_bias: float
-    liquidity_bias: float
-    hedge_bias: float
-    aiq_base: float
+    Subclasses override `mock_decide` and `heuristic` with strategy-specific
+    logic. `decide` is the single entrypoint the engine calls; default routes
+    to `heuristic`. `on_signal` is called when an AXL message is delivered.
 
-    def __post_init__(self) -> None:
-        if self.tier not in {1, 2, 3}:
+    The default constructor argument set is permissive enough that minimal
+    quickstart subclasses can omit ``__init__`` entirely; set
+    ``archetype_name`` as a class attribute to control the agent's name.
+    """
+
+    archetype_name: str | None = None
+
+    def __init__(
+        self,
+        name: str | None = None,
+        tier: int = 2,
+        risk_appetite: float = 0.5,
+        momentum_bias: float = 0.5,
+        liquidity_bias: float = 0.5,
+        hedge_bias: float = 0.5,
+        aiq_base: float = 0.7,
+    ) -> None:
+        if name is None:
+            name = type(self).archetype_name or type(self).__name__.lower()
+        if tier not in {1, 2, 3}:
             raise ValueError("tier must be 1, 2, or 3")
-        for field_name in (
-            "risk_appetite",
-            "momentum_bias",
-            "liquidity_bias",
-            "hedge_bias",
-            "aiq_base",
+        for field_name, value in (
+            ("risk_appetite", risk_appetite),
+            ("momentum_bias", momentum_bias),
+            ("liquidity_bias", liquidity_bias),
+            ("hedge_bias", hedge_bias),
+            ("aiq_base", aiq_base),
         ):
-            value = getattr(self, field_name)
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{field_name} must be between 0.0 and 1.0")
 
+        self.name = name
+        self.tier = tier
+        self.risk_appetite = risk_appetite
+        self.momentum_bias = momentum_bias
+        self.liquidity_bias = liquidity_bias
+        self.hedge_bias = hedge_bias
+        self.aiq_base = aiq_base
+
+    def decide(self, market_state: dict[str, Any], memory: dict[str, Any]) -> dict[str, Any]:
+        return self.heuristic(market_state, memory)
+
+    def mock_decide(self, market_state: dict[str, Any], memory: dict[str, Any]) -> dict[str, Any]:
+        return self.heuristic(market_state, memory)
+
+    def heuristic(self, market_state: dict[str, Any], memory: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "action": "hold",
+            "confidence": 0.5,
+            "rationale": f"{self.name}: base heuristic (no override)",
+        }
+
+    def on_signal(self, message: dict[str, Any]) -> None:
+        return None
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            "name": self.name,
+            "tier": self.tier,
+            "risk_appetite": self.risk_appetite,
+            "momentum_bias": self.momentum_bias,
+            "liquidity_bias": self.liquidity_bias,
+            "hedge_bias": self.hedge_bias,
+            "aiq_base": self.aiq_base,
+        }
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AgentArchetype):
+            return NotImplemented
+        return self.to_dict() == other.to_dict()
+
+    def __hash__(self) -> int:
+        return hash(("AgentArchetype", self.name, self.tier))
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self.name!r}, tier={self.tier})"
 
 
 @dataclass(frozen=True)

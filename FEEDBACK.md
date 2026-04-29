@@ -34,3 +34,25 @@
 - Document any Sepolia token support gaps encountered.
 - Record approval flow clarity, quote latency, error readability, and transaction construction notes.
 - Add concrete suggestions only after live API testing.
+
+## Uniswap API Integration Notes
+
+### Initial Setup & Authentication
+
+_Pending live run. Capture: dashboard signup friction, key issuance time, header name (`x-api-key`), any rate-limit headers observed._
+
+### Quote Endpoint Experience
+
+_Pending live run. Capture: `/v1/quote` p50/p95 latency, response size, route shape, presence/absence of `priceImpact` on Sepolia, any deprecation warnings._
+
+### Swap Execution Experience
+
+_Pending live run. Capture: `/v1/swap` payload requirements, gas fields returned vs needed, permit2 / approval flow on Sepolia, signing surprises in `eth_account`._
+
+### Sepolia Testnet Gaps
+
+_Pending live run. Capture: pools that exist on mainnet but not Sepolia, liquidity issues for WETH/USDC, RPC reliability across providers (publicnode, Alchemy, Infura)._
+
+### Bugs Encountered
+
+_Pending live run. Capture: error response shapes, opaque error codes, mismatches between docs and actual response, any retries needed._

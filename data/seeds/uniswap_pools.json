@@ -1,0 +1,42 @@
+[
+  {
+    "pool_address": "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
+    "token0": "USDC",
+    "token1": "WETH",
+    "tvl_usd": 184320000.0,
+    "fee_tier": 500,
+    "tick_spacing": 10
+  },
+  {
+    "pool_address": "0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8",
+    "token0": "USDC",
+    "token1": "WETH",
+    "tvl_usd": 92140000.0,
+    "fee_tier": 3000,
+    "tick_spacing": 60
+  },
+  {
+    "pool_address": "0x60594a405d53811d3bc4766596efd80fd545a270",
+    "token0": "DAI",
+    "token1": "WETH",
+    "tvl_usd": 38760000.0,
+    "fee_tier": 500,
+    "tick_spacing": 10
+  },
+  {
+    "pool_address": "0xc2e9f25be6257c210d7adf0d4cd6e3e881ba25f8",
+    "token0": "DAI",
+    "token1": "WETH",
+    "tvl_usd": 14920000.0,
+    "fee_tier": 3000,
+    "tick_spacing": 60
+  },
+  {
+    "pool_address": "0x4585fe77225b41b697c938b018e2ac67ac5a20c0",
+    "token0": "WBTC",
+    "token1": "WETH",
+    "tvl_usd": 71240000.0,
+    "fee_tier": 500,
+    "tick_spacing": 10
+  }
+]

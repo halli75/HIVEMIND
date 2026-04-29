@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { InferenceMetrics } from "./components/InferenceMetrics";
+import { SwarmGraph } from "./components/SwarmGraph";
 import type {
   AgentStatus,
   AgentTier,
@@ -9,6 +11,121 @@ import type {
   SwarmMetrics,
 } from "./types";
 import { useSwarmStream } from "./useSwarmStream";
+
+const CRYSTALLIZE_API_URL =
+  (import.meta.env.VITE_HIVEMIND_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+
+type CrystallizedAgent = {
+  token_id: number;
+  tx_hash: string;
+  storage_ref: string;
+  archetype: string | null;
+  composite_score: number | null;
+  owner: string;
+  chain?: string;
+  explorer?: string | null;
+};
+
+const TX_EXPLORERS = {
+  zerog: (hash: string) => `https://chainscan-galileo.0g.ai/tx/${hash}`,
+  sepolia: (hash: string) => `https://sepolia.etherscan.io/tx/${hash}`,
+};
+
+const explorerFor = (entry: CrystallizedAgent) => {
+  if (entry.explorer) return entry.explorer;
+  if (entry.storage_ref.startsWith("mock://")) return null;
+  if (entry.chain === "sepolia") return TX_EXPLORERS.sepolia(entry.tx_hash);
+  if (entry.chain === "0g-galileo" || entry.storage_ref.startsWith("0g://")) {
+    return TX_EXPLORERS.zerog(entry.tx_hash);
+  }
+  return null;
+};
+
+function CrystallizePanel({
+  simulationRunId,
+  apiAvailable,
+}: {
+  simulationRunId: string;
+  apiAvailable: boolean;
+}) {
+  const [isCrystallizing, setIsCrystallizing] = useState(false);
+  const [results, setResults] = useState<CrystallizedAgent[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleCrystallize = async () => {
+    if (!CRYSTALLIZE_API_URL) {
+      setError("VITE_HIVEMIND_API_URL is not configured.");
+      return;
+    }
+    setIsCrystallizing(true);
+    setError(null);
+    try {
+      const response = await fetch(`${CRYSTALLIZE_API_URL}/crystallize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ simulation_run_id: simulationRunId, top_n: 1 }),
+      });
+      if (!response.ok) {
+        throw new Error(`POST /crystallize returned ${response.status}`);
+      }
+      const data = (await response.json()) as { crystallized: CrystallizedAgent[] };
+      setResults(data.crystallized);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsCrystallizing(false);
+    }
+  };
+
+  return (
+    <section className="panel crystallize-panel" aria-labelledby="crystallize-heading">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Winner crystallization</p>
+          <h2 id="crystallize-heading">Mint top agent as iNFT</h2>
+        </div>
+        <span className={`connection-pill ${apiAvailable ? "api" : "mock"}`}>
+          {apiAvailable ? "POST /crystallize ready" : "API offline"}
+        </span>
+      </div>
+      <div className="run-row">
+        <button type="button" onClick={() => void handleCrystallize()} disabled={isCrystallizing || !apiAvailable}>
+          {isCrystallizing ? "Crystallizing..." : "Crystallize Winner"}
+        </button>
+      </div>
+      {error ? <p className="connection-error">{error}</p> : null}
+      {results && results.length > 0 ? (
+        <div className="transcript-list">
+          {results.map((entry) => {
+            const explorerHref = explorerFor(entry);
+            return (
+              <div className="transcript-row" key={entry.token_id}>
+                <span>Token ID</span>
+                <strong>#{entry.token_id}</strong>
+                <span>Archetype</span>
+                <strong>{entry.archetype ?? "unknown"}</strong>
+                <span>Composite</span>
+                <strong>{entry.composite_score?.toFixed(4) ?? "-"}</strong>
+                <span>Tx</span>
+                <strong>
+                  {explorerHref ? (
+                    <a href={explorerHref} target="_blank" rel="noreferrer">
+                      {entry.tx_hash.slice(0, 12)}...
+                    </a>
+                  ) : (
+                    `${entry.tx_hash.slice(0, 12)}...`
+                  )}
+                </strong>
+                <span>Storage</span>
+                <strong>{entry.storage_ref}</strong>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 const tierLabels: Record<AgentTier, string> = {
   T1: "Tier 1 / 0G active",
@@ -217,55 +334,6 @@ function TierStatusPanel({ agents }: { agents: SwarmAgent[] }) {
   );
 }
 
-function SwarmGraph({ agents, tick }: { agents: SwarmAgent[]; tick: number }) {
-  const topAgents = useMemo(
-    () => [...agents].sort((a, b) => b.score - a.score).slice(0, 12),
-    [agents],
-  );
-
-  return (
-    <section className="panel graph-panel" aria-labelledby="graph-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Swarm execution</p>
-          <h2 id="graph-heading">{agents.length} agents reacting</h2>
-        </div>
-        <span className="tick">tick {tick}</span>
-      </div>
-      <svg className="swarm-svg" viewBox="0 0 100 100" role="img" aria-label="Graph-like swarm visualization">
-        <defs>
-          <radialGradient id="winner-glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#f8f1a5" stopOpacity="0.9" />
-            <stop offset="100%" stopColor="#f8f1a5" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-        {topAgents.slice(1).map((agent) => (
-          <line
-            className="agent-edge"
-            key={`edge-${agent.id}`}
-            x1={topAgents[0]?.x ?? 50}
-            x2={agent.x}
-            y1={topAgents[0]?.y ?? 50}
-            y2={agent.y}
-          />
-        ))}
-        {agents.map((agent) => (
-          <circle
-            className={`agent-node ${agent.tier.toLowerCase()} ${agent.status}`}
-            cx={agent.x}
-            cy={agent.y}
-            key={agent.id}
-            r={agent.status === "winner" ? 1.55 : agent.tier === "T1" ? 1.05 : 0.72}
-          />
-        ))}
-        {topAgents[0] ? (
-          <circle cx={topAgents[0].x} cy={topAgents[0].y} fill="url(#winner-glow)" r="6" />
-        ) : null}
-      </svg>
-    </section>
-  );
-}
-
 function Leaderboard({ entries }: { entries: LeaderboardEntry[] }) {
   return (
     <section className="panel leaderboard-panel" aria-labelledby="leaderboard-heading">
@@ -306,8 +374,21 @@ export function App() {
     "ETH volatility spikes 6%, USDC liquidity thins on Sepolia, and gas rises for three blocks. Re-rank agents for a conservative swap.",
   );
   const [agentCount, setAgentCount] = useState(250);
-  const { agents, metrics, leaderboard, tick, mode, badges, transcript, isRunningScenario, error, runScenario } =
-    useSwarmStream(agentCount, scenario);
+  const {
+    agents,
+    metrics,
+    leaderboard,
+    tick,
+    mode,
+    badges,
+    transcript,
+    axlMessages,
+    totalAgentCount,
+    inferenceBudget,
+    isRunningScenario,
+    error,
+    runScenario,
+  } = useSwarmStream(agentCount, scenario);
 
   return (
     <main className="app-shell">
@@ -335,12 +416,24 @@ export function App() {
           />
           <ConnectionBadges badges={badges} error={error} />
           <TierStatusPanel agents={agents} />
+          <InferenceMetrics budget={inferenceBudget} />
         </div>
-        <SwarmGraph agents={agents} tick={tick} />
+        <SwarmGraph
+          agents={agents}
+          axlMessages={axlMessages}
+          tick={tick}
+          totalAgentCount={totalAgentCount}
+          totalAxlMessages={metrics.axlMessages}
+          loading={mode === "mock"}
+        />
         <div className="right-stack">
           <MetricPanel metrics={metrics} mode={mode} />
           <TranscriptPanel transcript={transcript} />
           <Leaderboard entries={leaderboard} />
+          <CrystallizePanel
+            simulationRunId={transcript.latestScenario || "manual"}
+            apiAvailable={mode === "api"}
+          />
         </div>
       </div>
     </main>

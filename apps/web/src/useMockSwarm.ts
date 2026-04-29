@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentStatus, AgentTier, LeaderboardEntry, SwarmAgent, SwarmMetrics } from "./types";
+import type {
+  AgentStatus,
+  AgentTier,
+  Archetype,
+  AxlEdgeMessage,
+  InferenceBudget,
+  LeaderboardEntry,
+  SwarmAgent,
+  SwarmMetrics,
+} from "./types";
 
 const STRATEGIES = [
   "Volatility mean reversion",
@@ -9,6 +18,26 @@ const STRATEGIES = [
   "Momentum hedge",
   "Oracle drift monitor",
 ];
+
+const ARCHETYPE_DISTRIBUTION: { archetype: Archetype; weight: number }[] = [
+  { archetype: "degen", weight: 30 },
+  { archetype: "whale", weight: 20 },
+  { archetype: "lp_provider", weight: 15 },
+  { archetype: "arbitrageur", weight: 15 },
+  { archetype: "mev_searcher", weight: 10 },
+  { archetype: "governance_voter", weight: 5 },
+  { archetype: "stablecoin_arb", weight: 5 },
+];
+
+const archetypeForIndex = (index: number): Archetype => {
+  const bucket = index % 100;
+  let cumulative = 0;
+  for (const entry of ARCHETYPE_DISTRIBUTION) {
+    cumulative += entry.weight;
+    if (bucket < cumulative) return entry.archetype;
+  }
+  return "degen";
+};
 
 const tierForIndex = (index: number): AgentTier => {
   if (index % 11 === 0) return "T1";
@@ -38,11 +67,14 @@ const createAgents = (count: number): SwarmAgent[] =>
       score,
       confidence: 0.52 + (((index * 19) % 44) / 100),
       strategy: STRATEGIES[index % STRATEGIES.length],
+      archetype: archetypeForIndex(index),
     };
   });
 
 const latestReceipt = (tick: number) =>
   tick < 7 ? "pending Sepolia quote" : `0x7f3a...${(9120 + tick).toString(16)}`;
+
+const MOCK_MESSAGE_TYPES = ["TRADE_INTENT", "INFERENCE_RESULT", "PRICE_UPDATE"];
 
 export function useMockSwarm(agentCount: number, scenario: string) {
   const [tick, setTick] = useState(0);
@@ -68,6 +100,28 @@ export function useMockSwarm(agentCount: number, scenario: string) {
       };
     });
   }, [agentCount, scenario, tick]);
+
+  const axlMessages: AxlEdgeMessage[] = useMemo(() => {
+    if (agents.length < 2) return [];
+    const out: AxlEdgeMessage[] = [];
+    for (let offset = 0; offset < 3; offset += 1) {
+      const messageTick = Math.max(0, tick - offset);
+      const count = 6;
+      for (let i = 0; i < count; i += 1) {
+        const sourceIdx = (messageTick * 7 + i * 11) % agents.length;
+        const targetIdx = (messageTick * 13 + i * 5 + 3) % agents.length;
+        if (sourceIdx === targetIdx) continue;
+        out.push({
+          id: `mock-${messageTick}-${i}`,
+          source: agents[sourceIdx].id,
+          target: agents[targetIdx].id,
+          type: MOCK_MESSAGE_TYPES[(messageTick + i) % MOCK_MESSAGE_TYPES.length],
+          tick: messageTick,
+        });
+      }
+    }
+    return out;
+  }, [agents, tick]);
 
   const metrics: SwarmMetrics = useMemo(() => {
     const fallbackCount = agents.filter((agent) => agent.status === "fallback").length;
@@ -103,5 +157,16 @@ export function useMockSwarm(agentCount: number, scenario: string) {
     [agents],
   );
 
-  return { agents, metrics, leaderboard, tick };
+  const inferenceBudget: InferenceBudget = useMemo(() => {
+    const callsThisTick = 4 + (tick % 7);
+    return {
+      callsThisTick,
+      cap: 10,
+      callsPerTickAvg: 5 + Math.sin(tick / 5) * 1.5,
+      aiqSlotsActive: 3 + (tick % 8),
+      aiqSlotsTotal: 10,
+    };
+  }, [tick]);
+
+  return { agents, metrics, leaderboard, tick, axlMessages, inferenceBudget };
 }
