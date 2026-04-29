@@ -1,4 +1,105 @@
 import { useMemo, useState } from "react";
+const CRYSTALLIZE_API_URL =
+  (import.meta.env.VITE_HIVEMIND_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+
+type CrystallizedAgent = {
+  token_id: number;
+  tx_hash: string;
+  storage_ref: string;
+  archetype: string | null;
+  composite_score: number | null;
+  owner: string;
+};
+
+const TX_EXPLORERS = {
+  zerog: (hash: string) => `https://chainscan.0g.ai/tx/${hash}`,
+  sepolia: (hash: string) => `https://sepolia.etherscan.io/tx/${hash}`,
+};
+
+function CrystallizePanel({
+  simulationRunId,
+  apiAvailable,
+}: {
+  simulationRunId: string;
+  apiAvailable: boolean;
+}) {
+  const [isCrystallizing, setIsCrystallizing] = useState(false);
+  const [results, setResults] = useState<CrystallizedAgent[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleCrystallize = async () => {
+    if (!CRYSTALLIZE_API_URL) {
+      setError("VITE_HIVEMIND_API_URL is not configured.");
+      return;
+    }
+    setIsCrystallizing(true);
+    setError(null);
+    try {
+      const response = await fetch(`${CRYSTALLIZE_API_URL}/crystallize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ simulation_run_id: simulationRunId, top_n: 1 }),
+      });
+      if (!response.ok) {
+        throw new Error(`POST /crystallize returned ${response.status}`);
+      }
+      const data = (await response.json()) as { crystallized: CrystallizedAgent[] };
+      setResults(data.crystallized);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsCrystallizing(false);
+    }
+  };
+
+  const explorer = (hash: string) =>
+    hash.startsWith("0x") && hash.length === 66 && CRYSTALLIZE_API_URL.includes("0g")
+      ? TX_EXPLORERS.zerog(hash)
+      : TX_EXPLORERS.sepolia(hash);
+
+  return (
+    <section className="panel crystallize-panel" aria-labelledby="crystallize-heading">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Winner crystallization</p>
+          <h2 id="crystallize-heading">Mint top agent as iNFT</h2>
+        </div>
+        <span className={`connection-pill ${apiAvailable ? "api" : "mock"}`}>
+          {apiAvailable ? "POST /crystallize ready" : "API offline"}
+        </span>
+      </div>
+      <div className="run-row">
+        <button type="button" onClick={() => void handleCrystallize()} disabled={isCrystallizing || !apiAvailable}>
+          {isCrystallizing ? "Crystallizing..." : "Crystallize Winner"}
+        </button>
+      </div>
+      {error ? <p className="connection-error">{error}</p> : null}
+      {results && results.length > 0 ? (
+        <div className="transcript-list">
+          {results.map((entry) => (
+            <div className="transcript-row" key={entry.token_id}>
+              <span>Token ID</span>
+              <strong>#{entry.token_id}</strong>
+              <span>Archetype</span>
+              <strong>{entry.archetype ?? "unknown"}</strong>
+              <span>Composite</span>
+              <strong>{entry.composite_score?.toFixed(4) ?? "—"}</strong>
+              <span>Tx</span>
+              <strong>
+                <a href={explorer(entry.tx_hash)} target="_blank" rel="noreferrer">
+                  {entry.tx_hash.slice(0, 12)}…
+                </a>
+              </strong>
+              <span>Storage</span>
+              <strong>{entry.storage_ref}</strong>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 import type {
   AgentStatus,
   AgentTier,
@@ -315,6 +416,10 @@ export function App() {
           <MetricPanel metrics={metrics} mode={mode} />
           <TranscriptPanel transcript={transcript} />
           <Leaderboard entries={leaderboard} />
+          <CrystallizePanel
+            simulationRunId={transcript.latestScenario || "manual"}
+            apiAvailable={mode === "api"}
+          />
         </div>
       </div>
     </main>

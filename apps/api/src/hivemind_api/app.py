@@ -4,11 +4,19 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from hivemind_sdk import LocalAxlMessageBus, Scenario, SwarmEngine
+from hivemind_sdk import (
+    CrystallizationPipeline,
+    LocalAxlMessageBus,
+    LocalStorageUploadProvider,
+    MockWeb3Provider,
+    Scenario,
+    ScoringEngine,
+    SwarmEngine,
+)
 
 
 class ScenarioRequest(BaseModel):
@@ -30,6 +38,28 @@ class ScenarioRequest(BaseModel):
             gas_pressure=self.gas_pressure,
             signal_strength=self.signal_strength,
         )
+
+
+class CrystallizeRequest(BaseModel):
+    simulation_run_id: str = Field(min_length=1)
+    top_n: int = Field(default=1, ge=1, le=10)
+
+
+_MOCK_OWNER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
+
+
+def _build_crystallization_pipeline() -> CrystallizationPipeline:
+    use_mock = os.environ.get("HIVEMIND_USE_MOCK_0G", "true").lower() in {"1", "true", "yes"}
+    owner_address = os.environ.get("HIVEMIND_INFT_OWNER_ADDRESS") or _MOCK_OWNER_ADDRESS
+    if use_mock:
+        return CrystallizationPipeline(
+            storage_provider=LocalStorageUploadProvider(),
+            web3_provider=MockWeb3Provider(),
+            owner_address=owner_address,
+        )
+    raise RuntimeError(
+        "Live 0G crystallization not configured. Set HIVEMIND_USE_MOCK_0G=true or wire a real Web3 provider."
+    )
 
 
 class WebSocketHub:
@@ -116,6 +146,8 @@ def create_app(
         axl_transcript_path=axl_transcript_path,
     )
     app.state.websocket_hub = WebSocketHub()
+    app.state.scoring_engine = ScoringEngine()
+    app.state.crystallization_pipeline = _build_crystallization_pipeline()
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -144,6 +176,43 @@ def create_app(
         return {
             "sequence": snapshot.sequence,
             "leaderboard": [entry.to_dict() for entry in snapshot.leaderboard],
+        }
+
+    @app.post("/crystallize")
+    async def crystallize(request: CrystallizeRequest) -> dict[str, Any]:
+        snapshot = app.state.engine.latest_snapshot
+        if not snapshot.leaderboard:
+            raise HTTPException(status_code=409, detail="leaderboard is empty")
+
+        scoring: ScoringEngine = app.state.scoring_engine
+        pipeline: CrystallizationPipeline = app.state.crystallization_pipeline
+
+        candidates = list(snapshot.leaderboard[: request.top_n])
+        crystallized: list[dict[str, Any]] = []
+        for entry in candidates:
+            history = [{"pnl_bps": entry.pnl_bps, "run_id": 0}]
+            metrics = scoring.score(history)
+            winner = {
+                "agent_id": entry.agent_id,
+                "archetype": entry.archetype,
+                "tier": entry.tier,
+                "decision_weights": {
+                    "confidence": entry.confidence,
+                    "aiq": entry.aiq,
+                },
+                "archetype_params": {"action": entry.action},
+                "sharpe_ratio": metrics["sharpe_ratio"],
+                "max_drawdown": metrics["max_drawdown"],
+                "consistency": metrics["consistency"],
+                "composite_score": metrics["composite_score"],
+            }
+            result = await pipeline.crystallize(winner, request.simulation_run_id)
+            crystallized.append(result)
+
+        return {
+            "crystallized": crystallized,
+            "simulation_run_id": request.simulation_run_id,
+            "sequence": snapshot.sequence,
         }
 
     @app.get("/metrics/tiers")

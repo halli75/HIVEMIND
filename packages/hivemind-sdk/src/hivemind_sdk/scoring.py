@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+from typing import Any
+
 from .models import AgentArchetype, Scenario, clamp_unit
 
 
@@ -65,3 +68,105 @@ def pnl_bps_for(action: str, archetype: AgentArchetype, scenario: Scenario, jitt
 def score_for(confidence: float, pnl_bps: float, aiq: float, tier: int) -> float:
     tier_bonus = {1: 0.0, 2: 2.5, 3: 4.0}[tier]
     return round(pnl_bps * 0.52 + confidence * 32.0 + aiq * 18.0 + tier_bonus, 4)
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _stdev(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mu = _mean(values)
+    var = sum((v - mu) ** 2 for v in values) / (len(values) - 1)
+    return math.sqrt(var)
+
+
+class ScoringEngine:
+    """Computes performance metrics over an agent's simulated history.
+
+    A history entry is a dict with at least a ``pnl_bps`` field per tick. The
+    optional ``runs`` field at the top level controls how many simulation
+    samples we expect when computing consistency.
+    """
+
+    TRADING_DAYS = 252
+
+    def __init__(self, runs: int = 50) -> None:
+        if runs <= 0:
+            raise ValueError("runs must be positive")
+        self.runs = runs
+
+    def score(self, agent_history: list[dict[str, Any]]) -> dict[str, float]:
+        returns = [float(tick.get("pnl_bps", 0.0)) for tick in agent_history]
+
+        sharpe_ratio = self._sharpe(returns)
+        max_drawdown = self._max_drawdown(returns)
+        consistency = self._consistency(agent_history)
+
+        composite = 0.5 * self._normalize_sharpe(sharpe_ratio) \
+            + 0.3 * consistency \
+            - 0.2 * self._normalize_drawdown(max_drawdown)
+        composite_score = max(0.0, min(1.0, composite))
+
+        return {
+            "sharpe_ratio": round(sharpe_ratio, 6),
+            "max_drawdown": round(max_drawdown, 6),
+            "consistency": round(consistency, 6),
+            "composite_score": round(composite_score, 6),
+        }
+
+    def rank(self, all_agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        ranked = sorted(
+            all_agents,
+            key=lambda a: float(a.get("composite_score", 0.0)),
+            reverse=True,
+        )
+        return [{**agent, "rank": idx + 1} for idx, agent in enumerate(ranked)]
+
+    def _sharpe(self, returns: list[float]) -> float:
+        if not returns:
+            return 0.0
+        mu = _mean(returns)
+        sigma = _stdev(returns)
+        if sigma == 0.0:
+            return 0.0
+        return (mu / sigma) * math.sqrt(self.TRADING_DAYS)
+
+    @staticmethod
+    def _max_drawdown(returns: list[float]) -> float:
+        if not returns:
+            return 0.0
+        cumulative = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for r in returns:
+            cumulative += r
+            if cumulative > peak:
+                peak = cumulative
+            dd = peak - cumulative
+            if dd > max_dd:
+                max_dd = dd
+        return max_dd
+
+    def _consistency(self, agent_history: list[dict[str, Any]]) -> float:
+        if not agent_history:
+            return 0.0
+        run_pnls: dict[Any, float] = {}
+        for tick in agent_history:
+            run_id = tick.get("run_id", 0)
+            run_pnls[run_id] = run_pnls.get(run_id, 0.0) + float(tick.get("pnl_bps", 0.0))
+        if not run_pnls:
+            return 0.0
+        positive = sum(1 for v in run_pnls.values() if v > 0)
+        return positive / len(run_pnls)
+
+    @staticmethod
+    def _normalize_sharpe(sharpe: float) -> float:
+        # squashes (-inf, inf) into [0, 1] via logistic; sharpe of 0 => 0.5
+        return 1.0 / (1.0 + math.exp(-sharpe / 4.0))
+
+    @staticmethod
+    def _normalize_drawdown(drawdown: float) -> float:
+        # treat 200 bps drawdown as a "full" 1.0 penalty
+        return max(0.0, min(1.0, drawdown / 200.0))

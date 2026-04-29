@@ -6,51 +6,46 @@ import { network } from "hardhat";
 const { ethers } = await network.create();
 
 describe("HivemindINFT", function () {
-  it("mints a winning agent with a storage and intelligence reference", async function () {
+  it("mints a winning agent with an intelligence reference and metadata URI", async function () {
     const [deployer, winner] = await ethers.getSigners();
-    const inft = await ethers.deployContract("HivemindINFT", [
-      deployer.address
-    ]);
+    const inft = await ethers.deployContract("HivemindINFT", [deployer.address]);
     const deploymentBlock = await ethers.provider.getBlockNumber();
 
-    const storageHash =
-      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const intelligenceRef = "0g://storage/hivemind/snapshots/agent-alpha.enc";
+    const metadataURI = "ipfs://bafy.../agent-alpha.json";
+    const royaltyBps = 500n;
 
-    const tx = await inft.mintAgent(
-      winner.address,
-      "0g://storage/hivemind/snapshots/agent-alpha.json",
-      storageHash,
-      "0g-compute:qwen-2.5-7b-instruct",
-      "sha256:strategy-alpha-v0",
-      9120
-    );
+    const tx = await inft.mintAgent(winner.address, intelligenceRef, metadataURI, royaltyBps);
     await tx.wait();
 
     const events = await inft.queryFilter(
-      inft.filters.AgentCrystallized(),
+      inft.filters.AgentMinted(),
       deploymentBlock,
-      "latest"
+      "latest",
     );
     assert.equal(events.length, 1);
     assert.equal(events[0].args[0], 1n);
     assert.equal(events[0].args[1], winner.address);
-    assert.equal(
-      events[0].args[2],
-      "0g://storage/hivemind/snapshots/agent-alpha.json"
-    );
-    assert.equal(events[0].args[3], storageHash);
-    assert.equal(events[0].args[4], "0g-compute:qwen-2.5-7b-instruct");
-    assert.equal(events[0].args[5], 9120n);
+    assert.equal(events[0].args[2], intelligenceRef);
 
     assert.equal(await inft.ownerOf(1), winner.address);
+    assert.equal(await inft.intelligenceRef(1), intelligenceRef);
+    assert.equal(await inft.tokenURI(1), metadataURI);
 
-    const ref = await inft.intelligenceRef(1);
-    assert.equal(
-      ref.storageUri,
-      "0g://storage/hivemind/snapshots/agent-alpha.json"
+    const [receiver, royaltyAmount] = await inft.royaltyInfo(1, 10_000n);
+    assert.equal(receiver, winner.address);
+    assert.equal(royaltyAmount, 500n);
+
+    assert.equal(await inft.supportsInterface("0x2a55205a"), true);
+    assert.equal(await inft.supportsInterface("0x80ac58cd"), true);
+  });
+
+  it("rejects mints from non-owners", async function () {
+    const [deployer, attacker, victim] = await ethers.getSigners();
+    const inft = await ethers.deployContract("HivemindINFT", [deployer.address]);
+
+    await assert.rejects(
+      inft.connect(attacker).mintAgent(victim.address, "0g://x", "ipfs://y", 100n),
     );
-    assert.equal(ref.storageHash, storageHash);
-    assert.equal(ref.strategyDigest, "sha256:strategy-alpha-v0");
-    assert.equal(ref.aiq, 9120n);
   });
 });

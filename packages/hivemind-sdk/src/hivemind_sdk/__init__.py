@@ -1,6 +1,20 @@
-"""Local-first SDK for deterministic HIVEMIND swarm simulations."""
+"""Local-first SDK for deterministic HIVEMIND swarm simulations.
+
+Note: ``CrystallizationPipeline`` requires the optional ``web3`` and
+``cryptography`` packages. Install them with ``pip install hivemind-sdk[crystallize]``
+or directly: ``pip install web3 cryptography``.
+"""
 
 from .archetypes import DEFAULT_ARCHETYPES, archetype_by_name
+from .crystallization import (
+    CrystallizationPipeline,
+    LocalStorageUploadProvider,
+    MockWeb3Provider,
+    Storage0GProvider,
+    Web3MintProvider,
+    Web3Provider,
+)
+from .scoring import ScoringEngine
 from .axl import (
     AXL_MESSAGE_TYPES,
     AxlMessage,
@@ -44,6 +58,7 @@ __all__ = [
     "AxlMessage",
     "AxlMessageType",
     "AxlTranscriptStats",
+    "CrystallizationPipeline",
     "DEFAULT_ARCHETYPES",
     "ExecutionProvider",
     "InferenceProvider",
@@ -51,16 +66,22 @@ __all__ = [
     "LeaderboardEntry",
     "LocalAxlMessageBus",
     "LocalExecutionProvider",
+    "LocalStorageUploadProvider",
     "MessageBus",
     "MockInferenceProvider",
+    "MockWeb3Provider",
     "RunMode",
     "Scenario",
+    "ScoringEngine",
     "SeedReplay",
+    "Storage0GProvider",
     "StorageProvider",
     "SwarmEngine",
     "SwarmSnapshot",
     "TierMetric",
     "UniswapExecutionProvider",
+    "Web3MintProvider",
+    "Web3Provider",
     "append_jsonl",
     "archetype_by_name",
     "payload_digest",
