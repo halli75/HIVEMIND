@@ -9,6 +9,8 @@ import type {
   SwarmMetrics,
 } from "./types";
 import { useSwarmStream } from "./useSwarmStream";
+import { SwarmGraph } from "./components/SwarmGraph";
+import { InferenceMetrics } from "./components/InferenceMetrics";
 
 const tierLabels: Record<AgentTier, string> = {
   T1: "Tier 1 / 0G active",
@@ -217,55 +219,6 @@ function TierStatusPanel({ agents }: { agents: SwarmAgent[] }) {
   );
 }
 
-function SwarmGraph({ agents, tick }: { agents: SwarmAgent[]; tick: number }) {
-  const topAgents = useMemo(
-    () => [...agents].sort((a, b) => b.score - a.score).slice(0, 12),
-    [agents],
-  );
-
-  return (
-    <section className="panel graph-panel" aria-labelledby="graph-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Swarm execution</p>
-          <h2 id="graph-heading">{agents.length} agents reacting</h2>
-        </div>
-        <span className="tick">tick {tick}</span>
-      </div>
-      <svg className="swarm-svg" viewBox="0 0 100 100" role="img" aria-label="Graph-like swarm visualization">
-        <defs>
-          <radialGradient id="winner-glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#f8f1a5" stopOpacity="0.9" />
-            <stop offset="100%" stopColor="#f8f1a5" stopOpacity="0" />
-          </radialGradient>
-        </defs>
-        {topAgents.slice(1).map((agent) => (
-          <line
-            className="agent-edge"
-            key={`edge-${agent.id}`}
-            x1={topAgents[0]?.x ?? 50}
-            x2={agent.x}
-            y1={topAgents[0]?.y ?? 50}
-            y2={agent.y}
-          />
-        ))}
-        {agents.map((agent) => (
-          <circle
-            className={`agent-node ${agent.tier.toLowerCase()} ${agent.status}`}
-            cx={agent.x}
-            cy={agent.y}
-            key={agent.id}
-            r={agent.status === "winner" ? 1.55 : agent.tier === "T1" ? 1.05 : 0.72}
-          />
-        ))}
-        {topAgents[0] ? (
-          <circle cx={topAgents[0].x} cy={topAgents[0].y} fill="url(#winner-glow)" r="6" />
-        ) : null}
-      </svg>
-    </section>
-  );
-}
-
 function Leaderboard({ entries }: { entries: LeaderboardEntry[] }) {
   return (
     <section className="panel leaderboard-panel" aria-labelledby="leaderboard-heading">
@@ -306,8 +259,21 @@ export function App() {
     "ETH volatility spikes 6%, USDC liquidity thins on Sepolia, and gas rises for three blocks. Re-rank agents for a conservative swap.",
   );
   const [agentCount, setAgentCount] = useState(250);
-  const { agents, metrics, leaderboard, tick, mode, badges, transcript, isRunningScenario, error, runScenario } =
-    useSwarmStream(agentCount, scenario);
+  const {
+    agents,
+    metrics,
+    leaderboard,
+    tick,
+    mode,
+    badges,
+    transcript,
+    axlMessages,
+    totalAgentCount,
+    inferenceBudget,
+    isRunningScenario,
+    error,
+    runScenario,
+  } = useSwarmStream(agentCount, scenario);
 
   return (
     <main className="app-shell">
@@ -335,8 +301,16 @@ export function App() {
           />
           <ConnectionBadges badges={badges} error={error} />
           <TierStatusPanel agents={agents} />
+          <InferenceMetrics budget={inferenceBudget} />
         </div>
-        <SwarmGraph agents={agents} tick={tick} />
+        <SwarmGraph
+          agents={agents}
+          axlMessages={axlMessages}
+          tick={tick}
+          totalAgentCount={totalAgentCount}
+          totalAxlMessages={metrics.axlMessages}
+          loading={mode === "mock"}
+        />
         <div className="right-stack">
           <MetricPanel metrics={metrics} mode={mode} />
           <TranscriptPanel transcript={transcript} />

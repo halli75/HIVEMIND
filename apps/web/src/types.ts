@@ -2,6 +2,15 @@ export type AgentTier = "T1" | "T2" | "T3";
 
 export type AgentStatus = "running" | "queued" | "fallback" | "winner";
 
+export type Archetype =
+  | "whale"
+  | "degen"
+  | "lp_provider"
+  | "arbitrageur"
+  | "governance_voter"
+  | "stablecoin_arb"
+  | "mev_searcher";
+
 export type SwarmAgent = {
   id: string;
   x: number;
@@ -11,6 +20,23 @@ export type SwarmAgent = {
   score: number;
   confidence: number;
   strategy: string;
+  archetype: Archetype;
+};
+
+export type AxlEdgeMessage = {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  tick: number;
+};
+
+export type InferenceBudget = {
+  callsThisTick: number;
+  cap: number;
+  callsPerTickAvg: number;
+  aiqSlotsActive: number;
+  aiqSlotsTotal: number;
 };
 
 export type SwarmMetrics = {
@@ -77,6 +103,9 @@ export type SwarmStreamState = {
   mode: ConnectionMode;
   badges: ConnectionBadge[];
   transcript: RunTranscript;
+  axlMessages: AxlEdgeMessage[];
+  totalAgentCount: number;
+  inferenceBudget: InferenceBudget;
   isRunningScenario: boolean;
   error: string | null;
   runScenario: (scenarioText: string) => Promise<void>;
