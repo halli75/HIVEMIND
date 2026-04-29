@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os as _os
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -338,10 +339,17 @@ class SwarmEngine:
                 "readback": integrations.zero_g_storage["readback"],
             },
             "inft": {
-                "status": "placeholder",
+                "status": "active" if _os.environ.get("INFT_CONTRACT_ADDRESS") else "placeholder",
+                "contract_address": _os.environ.get("INFT_CONTRACT_ADDRESS"),
+                "chain": "0g-galileo" if _os.environ.get("INFT_CONTRACT_ADDRESS") else None,
+                "chain_id": 16602 if _os.environ.get("INFT_CONTRACT_ADDRESS") else None,
                 "token_id": None,
                 "local_address": f"local-inft://{winner.agent_id}",
                 "memory_uri": integrations.zero_g_storage["uri"],
+                "explorer": (
+                    f"https://chainscan-galileo.0g.ai/address/{_os.environ['INFT_CONTRACT_ADDRESS']}"
+                    if _os.environ.get("INFT_CONTRACT_ADDRESS") else None
+                ),
             },
             "uniswap": {
                 "quote": integrations.uniswap["quote"],

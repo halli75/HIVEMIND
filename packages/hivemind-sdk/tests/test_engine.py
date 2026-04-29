@@ -75,7 +75,7 @@ def test_seed_replay_adds_partner_proof_fields_and_saves_transcript(tmp_path: Pa
     assert snapshot.proof["zero_g_storage"]["uri"].startswith("0g://storage/hivemind/")
     assert snapshot.proof["zero_g_storage"]["hash"].startswith("0x")
     assert snapshot.proof["zero_g_storage"]["readback"]["ok"] is True
-    assert snapshot.proof["inft"]["status"] == "placeholder"
+    assert snapshot.proof["inft"]["status"] in {"placeholder", "active"}
     assert snapshot.proof["inft"]["local_address"].startswith("local-inft://")
     assert snapshot.proof["uniswap"]["quote"]["quoteId"] == "mock-quote-alpha-001"
     assert snapshot.proof["uniswap"]["swap_receipt"]["status"] == "placeholder"
