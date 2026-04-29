@@ -1,5 +1,26 @@
 # HIVEMIND Task Plan
 
+## 0G Compute Integration Hardening
+
+- [x] Make `HIVEMIND_USE_MOCK_0G` the canonical live 0G toggle and preserve the legacy inference flag as an alias.
+- [x] Compose `run_mode` correctly for mock, local AXL, live 0G, and combined local AXL plus live 0G runs.
+- [x] Replace private provider field access with structured hybrid inference metrics.
+- [x] Record live 0G latency, fallback counts, and non-secret error context.
+- [x] Tolerate common JSON response wrappers from live models.
+- [x] Ignore and remove generated Python `*.egg-info/` artifacts.
+- [x] Add API/SDK tests for env precedence, run mode, metrics, parsing, fallback, and latency behavior.
+- [x] Verify Python tests and web build.
+
+## 0G Compute Integration Hardening Review
+
+- Canonicalized live 0G Compute configuration around `HIVEMIND_USE_MOCK_0G=false`; `HIVEMIND_MOCK_INFERENCE=false` remains a legacy alias when the canonical flag is absent.
+- Added composed run modes for `live_0g` and `local_axl+live_0g`.
+- Added structured hybrid inference metrics for attempted live calls, successful live calls, fallbacks, average latency, model, top-N, and last non-secret error.
+- Hardened 0G response parsing for exact JSON and fenced JSON, preserved fallback details, and removed the non-ASCII rationale arrow.
+- Added `*.egg-info/` to `.gitignore` and removed the generated egg-info directories from the working tree.
+- Verified Python tests with a fresh writable temp directory: `27 passed`.
+- Verified web build/typecheck with Vite after rerunning outside the sandbox due `spawn EPERM`.
+
 ## Current Setup Task
 
 - [x] Create project directory.

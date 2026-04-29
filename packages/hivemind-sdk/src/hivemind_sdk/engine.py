@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os as _os
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from .models import (
 )
 from .providers import (
     ExecutionProvider,
+    HybridInferenceProvider,
     InferenceProvider,
     LocalExecutionProvider,
     LocalAxlMessageBus,
@@ -185,13 +187,13 @@ class SwarmEngine:
 
         self._seed = seed
         self._replay = SeedReplay.from_directory(seed_snapshot_dir)
-        self._run_mode: RunMode = run_mode or ("local_axl" if axl_transcript_path else "mock")
-        if inference_provider is not None:
-            self._inference_provider = inference_provider
-        elif use_mock_inference():
-            self._inference_provider = MockInferenceProvider()
-        else:
-            self._inference_provider = LocalInferenceProvider()
+        self._inference_provider = inference_provider or LocalInferenceProvider()
+        local_axl_enabled = bool(axl_transcript_path) or isinstance(message_bus, LocalAxlMessageBus)
+        live_0g_enabled = isinstance(self._inference_provider, HybridInferenceProvider)
+        self._run_mode: RunMode = run_mode or self._compose_run_mode(
+            local_axl=local_axl_enabled,
+            live_0g=live_0g_enabled,
+        )
         self._storage_provider = storage_provider or LocalStorageProvider(replay=self._replay)
         self._message_bus = message_bus or (
             LocalAxlMessageBus(transcript_path=axl_transcript_path)
@@ -249,9 +251,25 @@ class SwarmEngine:
     def last_rate_limited_agents(self) -> tuple[str, ...]:
         return self._last_rate_limited_agents
 
+    @staticmethod
+    def _compose_run_mode(*, local_axl: bool, live_0g: bool) -> RunMode:
+        if local_axl and live_0g:
+            return "local_axl+live_0g"
+        if local_axl:
+            return "local_axl"
+        if live_0g:
+            return "live_0g"
+        return "mock"
+
     def inject_scenario(self, scenario: Scenario) -> SwarmSnapshot:
         self._sequence += 1
-        agent_states = tuple(self._evaluate_agent(agent, scenario) for agent in self._agents)
+        agent_states = list(self._evaluate_agent(agent, scenario) for agent in self._agents)
+        if isinstance(self._inference_provider, HybridInferenceProvider):
+            archetype_map = {a.agent_id: a.archetype for a in self._agents}
+            agent_states = self._inference_provider.refine_top_n(
+                agent_states, scenario, archetype_map
+            )
+        agent_states = tuple(agent_states)
         leaderboard = self._build_leaderboard(agent_states)
         tier_metrics = self._build_tier_metrics(agent_states, scenario)
         integrations = self._integration_envelope(scenario, agent_states, leaderboard)
@@ -379,12 +397,21 @@ class SwarmEngine:
             winner=winner,
             state_digest=state_digest,
         )
+        _is_real = isinstance(self._inference_provider, HybridInferenceProvider)
+        _metrics = self._inference_provider.metrics if _is_real else None
+        _metric_payload = _metrics.to_dict() if _metrics else {}
         return IntegrationEnvelope(
             zero_g_compute={
-                "mode": "seed_replay" if self._run_mode == "seed_replay" else "mock",
+                "mode": "0g_compute" if _is_real else "mock",
                 "request_id": f"0g-compute-{self._sequence:04d}",
-                "inference_calls": len(agent_states),
-                "model_tier": "local-deterministic",
+                "evaluated_agents": len(agent_states),
+                "inference_calls": _metric_payload.get("attempted_real_count", 0),
+                "model_tier": _metric_payload.get("model", "local-deterministic"),
+                "real_inference_count": _metric_payload.get("successful_real_count", 0),
+                "fallback_count": _metric_payload.get("fallback_count", 0),
+                "top_n": _metric_payload.get("top_n", 0),
+                "avg_latency_ms": _metric_payload.get("avg_latency_ms"),
+                "last_error": _metric_payload.get("last_error"),
             },
             zero_g_storage=storage,
             gensyn_axl=axl,
@@ -432,10 +459,17 @@ class SwarmEngine:
                 "readback": integrations.zero_g_storage["readback"],
             },
             "inft": {
-                "status": "placeholder",
+                "status": "active" if _os.environ.get("INFT_CONTRACT_ADDRESS") else "placeholder",
+                "contract_address": _os.environ.get("INFT_CONTRACT_ADDRESS"),
+                "chain": "0g-galileo" if _os.environ.get("INFT_CONTRACT_ADDRESS") else None,
+                "chain_id": 16602 if _os.environ.get("INFT_CONTRACT_ADDRESS") else None,
                 "token_id": None,
                 "local_address": f"local-inft://{winner.agent_id}",
                 "memory_uri": integrations.zero_g_storage["uri"],
+                "explorer": (
+                    f"https://chainscan-galileo.0g.ai/address/{_os.environ['INFT_CONTRACT_ADDRESS']}"
+                    if _os.environ.get("INFT_CONTRACT_ADDRESS") else None
+                ),
             },
             "uniswap": {
                 "quote": integrations.uniswap["quote"],

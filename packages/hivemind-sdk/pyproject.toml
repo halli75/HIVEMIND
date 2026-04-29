@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Local-first SDK primitives for HIVEMIND swarm simulations."
 requires-python = ">=3.11"
 dependencies = [
+    "httpx>=0.25",
     "cryptography>=42",
 ]
 

@@ -1,6 +1,12 @@
 import hardhatEthers from "@nomicfoundation/hardhat-ethers";
 import { defineConfig } from "hardhat/config";
-import "dotenv/config";
+import { config as dotenvConfig } from "dotenv";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Load root .env (one level up from contracts/)
+const _dir = dirname(fileURLToPath(import.meta.url));
+dotenvConfig({ path: resolve(_dir, "../.env") });
 
 const zerogGalileoRpcUrl =
   process.env.ZERO_G_RPC_URL || "https://evmrpc-testnet.0g.ai";

@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
+
+import httpx
 
 from .axl import transcript_stats
 from .models import Action, AgentArchetype, AgentState, LeaderboardEntry, Scenario
@@ -86,6 +91,30 @@ class InferenceProvider(Protocol):
         jitter: float,
     ) -> AgentState:
         """Evaluate a single agent for a scenario."""
+
+
+@dataclass(frozen=True)
+class HybridInferenceMetrics:
+    mode: str
+    model: str
+    top_n: int
+    attempted_real_count: int
+    successful_real_count: int
+    fallback_count: int
+    avg_latency_ms: float | None
+    last_error: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "model": self.model,
+            "top_n": self.top_n,
+            "attempted_real_count": self.attempted_real_count,
+            "successful_real_count": self.successful_real_count,
+            "fallback_count": self.fallback_count,
+            "avg_latency_ms": self.avg_latency_ms,
+            "last_error": self.last_error,
+        }
 
 
 class StorageProvider(Protocol):
@@ -417,3 +446,227 @@ class UniswapExecutionProvider:
                 "scenario_id": scenario.scenario_id,
             },
         }
+
+
+def _build_inference_prompt(archetype: "AgentArchetype", scenario: "Scenario") -> str:
+    return (
+        f"You are a {archetype.name} trading agent (tier {archetype.tier}).\n"
+        f"Scenario: {scenario.label}\n"
+        f"Market sentiment: {scenario.sentiment:.2f}, "
+        f"volatility: {scenario.volatility:.2f}, "
+        f"liquidity_delta: {scenario.liquidity_delta:.2f}\n\n"
+        'Respond ONLY with valid json (no markdown, no explanation):\n'
+        '{"action": "buy"|"sell"|"hold", "confidence": 0.0-1.0}'
+    )
+
+
+def _parse_model_json(content: str) -> dict[str, Any]:
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        value = json.loads(text[start : end + 1])
+    if not isinstance(value, dict):
+        raise ValueError("model response JSON must be an object")
+    return value
+
+
+def _safe_error(exc: Exception, token: str) -> str:
+    message = f"{type(exc).__name__}: {exc}"
+    if token:
+        message = message.replace(token, "[redacted]")
+    return message[:240]
+
+
+class ZeroGComputeInferenceProvider:
+    def __init__(
+        self,
+        *,
+        api_base_url: str,
+        bearer_token: str,
+        model: str,
+        timeout: float = 15.0,
+    ) -> None:
+        self._base = api_base_url.rstrip("/")
+        self._token = bearer_token
+        self._model = model
+        self._timeout = timeout
+        self._fallback = LocalInferenceProvider()
+        self._last_error: str | None = None
+        self._last_latency_ms: float | None = None
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    @property
+    def last_latency_ms(self) -> float | None:
+        return self._last_latency_ms
+
+    def evaluate_agent(
+        self,
+        *,
+        agent_id: str,
+        archetype: "AgentArchetype",
+        scenario: "Scenario",
+        jitter: float,
+    ) -> "AgentState":
+        prompt = _build_inference_prompt(archetype, scenario)
+        started = time.perf_counter()
+        try:
+            resp = None
+            for attempt in range(4):
+                resp = httpx.post(
+                    f"{self._base}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._token}"},
+                    json={
+                        "model": self._model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 64,
+                    },
+                    timeout=self._timeout,
+                )
+                if getattr(resp, "status_code", None) == 429:
+                    time.sleep(2.0 * (attempt + 1))
+                    continue
+                break
+            resp.raise_for_status()
+            raw = _parse_model_json(resp.json()["choices"][0]["message"]["content"])
+            action_str = str(raw["action"]).lower()
+            if action_str not in {"buy", "sell", "hold"}:
+                raise ValueError(f"unexpected action: {action_str}")
+            action = cast("Action", action_str)
+            confidence = float(raw["confidence"])
+            confidence = max(0.0, min(1.0, confidence))
+            self._last_error = None
+        except Exception as exc:
+            self._last_latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            self._last_error = _safe_error(exc, self._token)
+            state = self._fallback.evaluate_agent(
+                agent_id=agent_id, archetype=archetype, scenario=scenario, jitter=jitter
+            )
+            return AgentState(
+                agent_id=state.agent_id,
+                archetype=state.archetype,
+                tier=state.tier,
+                action=state.action,
+                confidence=state.confidence,
+                pnl_bps=state.pnl_bps,
+                aiq=state.aiq,
+                score=state.score,
+                rationale=f"0G fallback: {self._last_error}; {state.rationale}",
+                inference_source="local_fallback",
+                model="",
+            )
+
+        self._last_latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
+        aiq = aiq_for(archetype, scenario, confidence, jitter)
+        pnl_bps = pnl_bps_for(action, archetype, scenario, jitter)
+        score = score_for(confidence, pnl_bps, aiq, archetype.tier)
+        return AgentState(
+            agent_id=agent_id,
+            archetype=archetype.name,
+            tier=archetype.tier,
+            action=action,
+            confidence=confidence,
+            pnl_bps=pnl_bps,
+            aiq=aiq,
+            score=score,
+            rationale=f"0G/{self._model}: {archetype.name} -> {action} (conf={confidence:.2f})",
+            inference_source="0g_compute",
+            model=self._model,
+        )
+
+
+class HybridInferenceProvider:
+    """Local first pass for all agents; re-evaluates top-N with real 0G Compute."""
+
+    def __init__(
+        self, *, real: ZeroGComputeInferenceProvider, top_n: int = 10, max_workers: int = 2
+    ) -> None:
+        self._local = LocalInferenceProvider()
+        self._real = real
+        self._top_n = max(0, top_n)
+        self._max_workers = max(1, max_workers)
+        self._last_metrics = HybridInferenceMetrics(
+            mode="0g_compute",
+            model=real.model,
+            top_n=self._top_n,
+            attempted_real_count=0,
+            successful_real_count=0,
+            fallback_count=0,
+            avg_latency_ms=None,
+            last_error=None,
+        )
+
+    @property
+    def metrics(self) -> HybridInferenceMetrics:
+        return self._last_metrics
+
+    def evaluate_agent(
+        self,
+        *,
+        agent_id: str,
+        archetype: "AgentArchetype",
+        scenario: "Scenario",
+        jitter: float,
+    ) -> "AgentState":
+        return self._local.evaluate_agent(
+            agent_id=agent_id, archetype=archetype, scenario=scenario, jitter=jitter
+        )
+
+    def refine_top_n(
+        self,
+        states: list["AgentState"],
+        scenario: "Scenario",
+        archetypes: dict[str, "AgentArchetype"],
+    ) -> list["AgentState"]:
+        sorted_states = sorted(states, key=lambda s: s.score, reverse=True)
+        top = sorted_states[: self._top_n]
+        rest = sorted_states[self._top_n :]
+
+        def refine_one(state: "AgentState") -> tuple["AgentState", float]:
+            archetype = archetypes[state.agent_id]
+            started = time.perf_counter()
+            refined = self._real.evaluate_agent(
+                agent_id=state.agent_id,
+                archetype=archetype,
+                scenario=scenario,
+                jitter=0.0,
+            )
+            latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
+            return refined, latency_ms
+
+        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+            results = list(executor.map(refine_one, top))
+
+        refined = [state for state, _latency in results]
+        latencies = [latency for _state, latency in results]
+        successful = sum(1 for state in refined if state.inference_source == "0g_compute")
+        fallback = len(refined) - successful
+        last_error = None
+        for state in refined:
+            if state.inference_source == "local_fallback" and state.rationale.startswith("0G fallback: "):
+                last_error = state.rationale.removeprefix("0G fallback: ").split("; ", 1)[0]
+        self._last_metrics = HybridInferenceMetrics(
+            mode="0g_compute",
+            model=self._real.model,
+            top_n=self._top_n,
+            attempted_real_count=len(refined),
+            successful_real_count=successful,
+            fallback_count=fallback,
+            avg_latency_ms=round(sum(latencies) / len(latencies), 3) if latencies else None,
+            last_error=last_error,
+        )
+        return refined + rest

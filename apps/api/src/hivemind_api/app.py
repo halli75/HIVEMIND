@@ -10,12 +10,15 @@ from pydantic import BaseModel, Field
 
 from hivemind_sdk import (
     CrystallizationPipeline,
+    HybridInferenceProvider,
     LocalAxlMessageBus,
+    LocalInferenceProvider,
     LocalStorageUploadProvider,
     MockWeb3Provider,
     Scenario,
     ScoringEngine,
     SwarmEngine,
+    ZeroGComputeInferenceProvider,
 )
 
 
@@ -49,16 +52,14 @@ _MOCK_OWNER_ADDRESS = "0x000000000000000000000000000000000000dEaD"
 
 
 def _build_crystallization_pipeline() -> CrystallizationPipeline:
-    use_mock = os.environ.get("HIVEMIND_USE_MOCK_0G", "true").lower() in {"1", "true", "yes"}
+    # Crystallization always defaults to mock; a separate HIVEMIND_USE_MOCK_CRYSTALLIZE
+    # toggle or real provider wiring is needed for a live path. This keeps the
+    # /crystallize endpoint functional even when HIVEMIND_USE_MOCK_0G=false (live compute).
     owner_address = os.environ.get("HIVEMIND_INFT_OWNER_ADDRESS") or _MOCK_OWNER_ADDRESS
-    if use_mock:
-        return CrystallizationPipeline(
-            storage_provider=LocalStorageUploadProvider(),
-            web3_provider=MockWeb3Provider(),
-            owner_address=owner_address,
-        )
-    raise RuntimeError(
-        "Live 0G crystallization not configured. Set HIVEMIND_USE_MOCK_0G=true or wire a real Web3 provider."
+    return CrystallizationPipeline(
+        storage_provider=LocalStorageUploadProvider(),
+        web3_provider=MockWeb3Provider(),
+        owner_address=owner_address,
     )
 
 
@@ -97,6 +98,38 @@ def _resolve_repo_path(root: Path, value: str | Path) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def _env_bool(name: str, *, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes"}
+
+
+def _env_int(name: str, *, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _use_mock_0g() -> bool:
+    if "HIVEMIND_USE_MOCK_0G" in os.environ:
+        return _env_bool("HIVEMIND_USE_MOCK_0G", default=True)
+    if "HIVEMIND_MOCK_INFERENCE" in os.environ:
+        return _env_bool("HIVEMIND_MOCK_INFERENCE", default=True)
+    return True
+
+
+def _compose_run_mode(*, local_axl: bool, live_0g: bool) -> str | None:
+    if local_axl and live_0g:
+        return "local_axl+live_0g"
+    if local_axl:
+        return "local_axl"
+    if live_0g:
+        return "live_0g"
+    return None
+
+
 def _default_engine(
     *,
     seed_snapshot_dir: str | Path | None = None,
@@ -110,18 +143,40 @@ def _default_engine(
     runs_dir = _resolve_repo_path(root, transcript_root or os.environ.get("HIVEMIND_RUNS_DIR") or root / "runs")
     transcript_path_value = axl_transcript_path or os.environ.get("GENSYN_AXL_TRANSCRIPT_PATH")
     use_mock_gensyn = os.environ.get("HIVEMIND_USE_MOCK_GENSYN", "true").lower() in {"1", "true", "yes"}
+    use_mock_0g = _use_mock_0g()
     message_bus = None
-    run_mode = None
+    local_axl_enabled = False
     if transcript_path_value and not use_mock_gensyn:
         transcript_path = _resolve_repo_path(root, transcript_path_value)
         if transcript_path.exists() and transcript_path.suffix == ".jsonl":
             message_bus = LocalAxlMessageBus(transcript_path=transcript_path)
-            run_mode = "local_axl"
+            local_axl_enabled = True
+    inference_provider: LocalInferenceProvider | HybridInferenceProvider
+    if not use_mock_0g:
+        api_base_url = os.environ.get("ZERO_G_COMPUTE_API_BASE_URL")
+        bearer_token = os.environ.get("ZERO_G_COMPUTE_BEARER_TOKEN")
+        if not api_base_url or not bearer_token:
+            raise RuntimeError(
+                "Live 0G Compute requires ZERO_G_COMPUTE_API_BASE_URL and ZERO_G_COMPUTE_BEARER_TOKEN"
+            )
+        zero_g = ZeroGComputeInferenceProvider(
+            api_base_url=api_base_url,
+            bearer_token=bearer_token,
+            model=os.environ.get("ZERO_G_COMPUTE_MODEL", "qwen/qwen-2.5-7b-instruct"),
+        )
+        inference_provider = HybridInferenceProvider(
+            real=zero_g,
+            top_n=_env_int("ZERO_G_COMPUTE_TOP_N", default=10),
+            max_workers=_env_int("ZERO_G_COMPUTE_MAX_WORKERS", default=2),
+        )
+    else:
+        inference_provider = LocalInferenceProvider()
     return SwarmEngine(
         seed_snapshot_dir=seed_dir,
         transcript_root=runs_dir,
         message_bus=message_bus,
-        run_mode=run_mode,
+        run_mode=_compose_run_mode(local_axl=local_axl_enabled, live_0g=not use_mock_0g),
+        inference_provider=inference_provider,
     )
 
 

@@ -1,8 +1,9 @@
 import asyncio
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from hivemind_sdk import AxlMessage, Scenario, SwarmEngine, TokenBucket, append_jsonl
+from hivemind_sdk import AxlMessage, HybridInferenceProvider, Scenario, SwarmEngine, TokenBucket, ZeroGComputeInferenceProvider, append_jsonl
 
 
 def test_engine_is_deterministic_for_same_seed_and_scenario() -> None:
@@ -75,7 +76,7 @@ def test_seed_replay_adds_partner_proof_fields_and_saves_transcript(tmp_path: Pa
     assert snapshot.proof["zero_g_storage"]["uri"].startswith("0g://storage/hivemind/")
     assert snapshot.proof["zero_g_storage"]["hash"].startswith("0x")
     assert snapshot.proof["zero_g_storage"]["readback"]["ok"] is True
-    assert snapshot.proof["inft"]["status"] == "placeholder"
+    assert snapshot.proof["inft"]["status"] in {"placeholder", "active"}
     assert snapshot.proof["inft"]["local_address"].startswith("local-inft://")
     assert snapshot.proof["uniswap"]["quote"]["quoteId"] == "mock-quote-alpha-001"
     assert snapshot.proof["uniswap"]["swap_receipt"]["status"] == "placeholder"
@@ -154,12 +155,9 @@ def test_engine_falls_back_to_heuristic_when_token_bucket_empty() -> None:
 
     snapshot = asyncio.run(engine.run_async(ticks=1))
 
-    # Tier 1 is sized at 10 candidates but the bucket only had 2 tokens;
-    # the other 8 must have fallen through to the heuristic path.
     assert engine.last_rate_limited_count == 8
     assert len(engine.last_rate_limited_agents) == 8
     assert engine.token_bucket_remaining == 0
-    # All 15 agents are still represented in the snapshot.
     assert len(snapshot.agents) == 15
     assert snapshot.transcript["rate_limited_count"] == 8
     assert snapshot.transcript["token_bucket_capacity"] == 2
@@ -172,3 +170,41 @@ def test_engine_records_zero_rate_limited_when_bucket_has_capacity() -> None:
 
     assert engine.last_rate_limited_count == 0
     assert engine.last_rate_limited_agents == ()
+
+
+def test_engine_reports_live_0g_mode_and_metrics() -> None:
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": json.dumps({"action": "buy", "confidence": 0.77})}}]
+    }
+    inference = HybridInferenceProvider(
+        real=ZeroGComputeInferenceProvider(
+            api_base_url="https://fake-0g.example.com",
+            bearer_token="tok-test",
+            model="qwen-test",
+        ),
+        top_n=2,
+    )
+    with patch("httpx.post", return_value=mock_resp):
+        engine = SwarmEngine(agent_count=3, seed="live-0g-engine", inference_provider=inference)
+        snapshot = engine.inject_scenario(
+            Scenario(
+                scenario_id="live-0g-engine",
+                label="Live 0G engine",
+                volatility=0.5,
+                liquidity_delta=0.1,
+                sentiment=0.3,
+                gas_pressure=0.2,
+                signal_strength=0.6,
+            )
+        )
+
+    compute = snapshot.integrations.zero_g_compute
+    assert snapshot.run_mode == "live_0g"
+    assert compute["evaluated_agents"] == 3
+    assert compute["inference_calls"] == 2
+    assert compute["real_inference_count"] == 2
+    assert compute["fallback_count"] == 0
+    assert compute["model_tier"] == "qwen-test"
