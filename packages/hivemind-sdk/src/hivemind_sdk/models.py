@@ -36,18 +36,26 @@ class AgentArchetype:
     Subclasses override `mock_decide` and `heuristic` with strategy-specific
     logic. `decide` is the single entrypoint the engine calls; default routes
     to `heuristic`. `on_signal` is called when an AXL message is delivered.
+
+    The default constructor argument set is permissive enough that minimal
+    quickstart subclasses can omit ``__init__`` entirely; set
+    ``archetype_name`` as a class attribute to control the agent's name.
     """
+
+    archetype_name: str | None = None
 
     def __init__(
         self,
-        name: str,
-        tier: int,
-        risk_appetite: float,
-        momentum_bias: float,
-        liquidity_bias: float,
-        hedge_bias: float,
-        aiq_base: float,
+        name: str | None = None,
+        tier: int = 2,
+        risk_appetite: float = 0.5,
+        momentum_bias: float = 0.5,
+        liquidity_bias: float = 0.5,
+        hedge_bias: float = 0.5,
+        aiq_base: float = 0.7,
     ) -> None:
+        if name is None:
+            name = type(self).archetype_name or type(self).__name__.lower()
         if tier not in {1, 2, 3}:
             raise ValueError("tier must be 1, 2, or 3")
         for field_name, value in (

@@ -168,6 +168,7 @@ class MockInferenceProvider:
         scenario: Scenario,
         jitter: float,
     ) -> AgentState:
+        price_delta = scenario.sentiment * scenario.signal_strength
         market_state: dict[str, Any] = {
             "scenario_id": scenario.scenario_id,
             "volatility": scenario.volatility,
@@ -175,7 +176,8 @@ class MockInferenceProvider:
             "sentiment": scenario.sentiment,
             "gas_pressure": scenario.gas_pressure,
             "signal_strength": scenario.signal_strength,
-            "price_delta": scenario.sentiment * scenario.signal_strength,
+            "price_delta": price_delta,
+            "price_delta_pct": price_delta,
             "pool_spread_bps": max(0.0, scenario.volatility * 30.0 - 4.0),
             "peg_delta": scenario.liquidity_delta * 0.005,
         }
@@ -204,6 +206,7 @@ class MockInferenceProvider:
                 {"agent_id": "leader-002", "stake": 750_000, "vote": "abstain"},
             ],
             "min_spread_bps": 8,
+            "portfolio": 100_000.0,
         }
 
         decision = archetype.mock_decide(market_state, memory)

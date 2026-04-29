@@ -39,6 +39,7 @@ from .models import (
     SwarmSnapshot,
     TierMetric,
 )
+from .scenario import ScenarioInjector
 from .providers import (
     ExecutionProvider,
     InferenceProvider,
@@ -74,6 +75,7 @@ __all__ = [
     "MockWeb3Provider",
     "RunMode",
     "Scenario",
+    "ScenarioInjector",
     "ScoringEngine",
     "SeedReplay",
     "Storage0GProvider",

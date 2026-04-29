@@ -7,7 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence, Union
 
 from .archetypes import DEFAULT_ARCHETYPES
 from .axl_pool import AXLPoolManager
@@ -89,7 +89,7 @@ class SwarmEngine:
         agent_count: int | None = None,
         count: int | None = None,
         seed: str = "hivemind-local",
-        archetypes: tuple[AgentArchetype, ...] = DEFAULT_ARCHETYPES,
+        archetypes: Sequence[Union[AgentArchetype, type[AgentArchetype]]] = DEFAULT_ARCHETYPES,
         run_mode: RunMode | None = None,
         seed_snapshot_dir: str | Path | None = None,
         transcript_root: str | Path | None = None,
@@ -111,6 +111,17 @@ class SwarmEngine:
             raise ValueError("agent_count must be positive")
         if not archetypes:
             raise ValueError("at least one archetype is required")
+        normalized_archetypes: list[AgentArchetype] = []
+        for arch in archetypes:
+            if isinstance(arch, type) and issubclass(arch, AgentArchetype):
+                normalized_archetypes.append(arch())
+            elif isinstance(arch, AgentArchetype):
+                normalized_archetypes.append(arch)
+            else:
+                raise TypeError(
+                    f"archetypes must be AgentArchetype subclasses or instances, got {arch!r}"
+                )
+        archetypes = tuple(normalized_archetypes)
 
         self._seed = seed
         self._replay = SeedReplay.from_directory(seed_snapshot_dir)
@@ -501,13 +512,17 @@ class SwarmEngine:
         self._print_tick_summary(self._tick_index, tier1, tier1_results, tier2, tier2_results, tier3, tier3_results)
         return snapshot
 
-    async def run(self, ticks: int = 1, scenario: Scenario | None = None) -> SwarmSnapshot:
+    async def run_async(self, ticks: int = 1, scenario: Scenario | None = None) -> SwarmSnapshot:
         if ticks <= 0:
             raise ValueError("ticks must be positive")
         snapshot = self._snapshot
         for _ in range(ticks):
             snapshot = await self.tick(scenario)
         return snapshot
+
+    def run(self, ticks: int = 1, scenario: Scenario | None = None) -> SwarmSnapshot:
+        """Synchronous wrapper around ``run_async`` for quickstart usage."""
+        return asyncio.run(self.run_async(ticks=ticks, scenario=scenario))
 
     async def _axl_pool_ensure(self) -> AXLPoolManager | None:
         if not self._axl_node_urls:
@@ -611,6 +626,7 @@ class SwarmEngine:
 
 
 def _market_state_from_scenario(scenario: Scenario) -> dict[str, Any]:
+    price_delta = scenario.sentiment * scenario.signal_strength
     return {
         "scenario_id": scenario.scenario_id,
         "volatility": scenario.volatility,
@@ -618,7 +634,8 @@ def _market_state_from_scenario(scenario: Scenario) -> dict[str, Any]:
         "sentiment": scenario.sentiment,
         "gas_pressure": scenario.gas_pressure,
         "signal_strength": scenario.signal_strength,
-        "price_delta": scenario.sentiment * scenario.signal_strength,
+        "price_delta": price_delta,
+        "price_delta_pct": price_delta,
         "pool_spread_bps": max(0.0, scenario.volatility * 30.0 - 4.0),
         "peg_delta": scenario.liquidity_delta * 0.005,
     }
@@ -650,6 +667,7 @@ def _memory_from_scenario(scenario: Scenario, agent_id: str, jitter: float) -> d
             {"agent_id": "leader-002", "stake": 750_000, "vote": "abstain"},
         ],
         "min_spread_bps": 8,
+        "portfolio": 100_000.0,
     }
 
 
