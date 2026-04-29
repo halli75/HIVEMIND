@@ -23,6 +23,9 @@ from uniswap_client import (
 )
 
 
+DEFAULT_AMOUNT_IN_WEI = int(Decimal("0.001") * Decimal(10**18))
+
+
 def _resolve_swapper(env_key: str | None) -> str:
     if env_key:
         return Account.from_key(env_key).address
@@ -47,6 +50,16 @@ def _format_amount_out(quote: dict, fallback_decimals: int = 6) -> str:
     return str(Decimal(int(raw)) / (Decimal(10) ** fallback_decimals))
 
 
+def _amount_in_wei() -> int:
+    value = os.environ.get("UNISWAP_AMOUNT_IN_WEI", "").strip()
+    if not value:
+        return DEFAULT_AMOUNT_IN_WEI
+    amount = int(value)
+    if amount <= 0:
+        raise ValueError("UNISWAP_AMOUNT_IN_WEI must be positive")
+    return amount
+
+
 async def main() -> int:
     load_dotenv()
 
@@ -64,7 +77,11 @@ async def main() -> int:
         return 1
 
     swapper = _resolve_swapper(private_key)
-    amount_in = int(Decimal("0.001") * Decimal(10**18))
+    try:
+        amount_in = _amount_in_wei()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     client = UniswapClient(api_key=api_key, base_url=base_url, rpc_url=rpc_url)
     try:

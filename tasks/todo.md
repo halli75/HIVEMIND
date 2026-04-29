@@ -192,3 +192,17 @@
 - Orchestration script connects bootnode and swarm-cpu via Docker named network `swarm-boot-net` using `/dns4/hivemind-bootnode/tcp/30021/p2p/PEER_ID` multiaddr.
 - Target proof: single-node (`HIVEMIND_WORLD_SIZE=1`) DHT join without `failed to connect to bootstrap peers`; training begins.
 - **VERIFIED 2026-04-27**: `bootnodes: ['/dns4/hivemind-bootnode/tcp/30021/p2p/12D3KooWE5...']`, `Joining CodeZero Swarm`, `Starting round: 28239`. No `P2PDaemonError`. Training running. Node: `jagged spotted mandrill` / `QmRAFupGJwJB8mGG6eNsAbo1CQeAGQeEWqZTvALybgBetc`.
+
+## PR Review: Core HIVEMIND Engine
+
+- [x] Confirmed review range: 9 commits on `dev` after `00b089a`, with `dev` tracking `origin/dev`.
+- [x] Extracted and checked `HIVEMIND_Project_Proposal_v4.pdf` against the PR scope: swarm engine, visualization, crystallization, AXL P2P, and Uniswap execution.
+- [x] Reviewed SDK/API/AXL, contracts/0G crystallization, Uniswap execution scripts, frontend visualization, and docs for merge readiness.
+- [x] Applied small contained fixes: Sepolia chain guard in swap signing, explicit `HIVEMIND_ALLOW_TESTNET_SWAP` gate, env-driven Uniswap amount, mock-safe crystallization tx display, and lowercase quickstart actions.
+- [x] Ran Python/API/AXL/execution tests, web build/audit, contract compile/test/deploy/audit, AXL smoke, quickstart smoke, compileall, `git diff --check`, and outgoing-diff secret scan.
+
+## PR Review Notes
+
+- Current `dev` is behind `main` by six 0G commits; merging as-is would delete the current 0G mint script, hardened 0G provider tests, and ERC-7857 contract hardening from `main`.
+- The local AXL proof is strong: smoke run produced 40 typed messages across two OS processes with p50/p95 latency.
+- The PR still needs a non-trivial rebase/merge of `main` before approval because the branch composition would regress Part A/Part B 0G work.

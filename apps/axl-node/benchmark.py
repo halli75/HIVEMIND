@@ -104,7 +104,7 @@ def _process_rss_kb(pid: int) -> int:
         # ps reports RSS in kilobytes on Darwin and Linux
         out = subprocess.check_output(["ps", "-o", "rss=", "-p", str(pid)], text=True).strip()
         return int(out) if out else 0
-    except (subprocess.CalledProcessError, ValueError):
+    except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
         return 0
 
 
@@ -222,7 +222,8 @@ async def _run_once(
             with contextlib.suppress(asyncio.CancelledError):
                 await drain_task
 
-        duration = max(send_done - start, 1e-6)
+        end = time.perf_counter()
+        duration = max(end - start, 1e-6)
         throughput = received_count / duration if duration else 0.0
         p50 = _percentile(latencies, 0.5)
         p95 = _percentile(latencies, 0.95)

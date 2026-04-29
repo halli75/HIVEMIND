@@ -66,6 +66,8 @@ class UniswapClient:
         recipient: str | None = None,
     ) -> dict[str, Any]:
         self._require_sepolia(chain_id)
+        if amount_in <= 0:
+            raise ValueError("amount_in must be positive")
 
         body: dict[str, Any] = {
             "type": "EXACT_INPUT",
@@ -114,6 +116,7 @@ class UniswapClient:
             "chainId": int(swap_tx.get("chainId", SEPOLIA_CHAIN_ID)),
             "from": account.address,
         }
+        self._require_sepolia(int(tx["chainId"]))
 
         gas_limit = swap_tx.get("gasLimit") or swap_tx.get("gas")
         if gas_limit is not None:

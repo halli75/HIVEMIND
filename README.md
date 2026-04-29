@@ -28,12 +28,12 @@ Phase 2 local AXL proof is live:
 
 Local Gensyn AXL coordinator benchmarks across 2- and 5-node clusters, sending 1,000 trade-intent and 1,000 market-signal messages per run (4,000 total deliveries, 2,000 sends per cluster). Source: [`apps/axl-node/benchmark_results.json`](apps/axl-node/benchmark_results.json).
 
-| Nodes | Messages Sent | Messages Received | Throughput (msgs/sec) | p50 Latency (ms) | p95 Latency (ms) | Duration (s) | Avg RSS (KB) |
-|------:|--------------:|------------------:|----------------------:|-----------------:|-----------------:|-------------:|-------------:|
-| 2     | 2,000         | 2,000             | 36,057                | 29.30            | 53.47            | 0.056        | 25,024       |
-| 5     | 2,000         | 2,000             | 38,547                | 28.52            | 51.34            | 0.052        | 25,712       |
+| Nodes | Messages Sent | Messages Received | Throughput (msgs/sec) | p50 Latency (ms) | p95 Latency (ms) | Duration (s) |
+|------:|--------------:|------------------:|----------------------:|-----------------:|-----------------:|-------------:|
+| 2     | 2,000         | 2,000             | 17,770                | 15.28            | 24.83            | 0.113        |
+| 5     | 2,000         | 2,000             | 17,707                | 17.40            | 27.01            | 0.113        |
 
-**What this means in plain English:** the swarm can move ~36,000–38,500 messages per second between AXL nodes, with the typical message arriving in under 30 milliseconds. That is fast enough for agents to coordinate trades in real time without the network being a bottleneck — and the throughput actually goes up slightly when the cluster grows from 2 to 5 nodes, which means the AXL routing scales cleanly as you add nodes instead of slowing down.
+**What this means in plain English:** the swarm can move ~17,700 messages per second end-to-end between AXL nodes, with the typical message arriving in under 20 milliseconds. That is fast enough for agents to coordinate trades in real time without the local AXL transport being the bottleneck.
 
 ## hivemind-sdk — OpenClaw-Inspired Architecture
 
@@ -69,13 +69,23 @@ class PanicSeller(AgentArchetype):
 
     def decide(self, market_state, memory) -> dict:
         if market_state["price_delta_pct"] < -0.05:
-            return {"action": "SELL", "amount": memory["portfolio"] * 0.5}
-        return {"action": "HOLD"}
+            return {
+                "action": "sell",
+                "amount": memory["portfolio"] * 0.5,
+                "confidence": 0.82,
+                "rationale": "panic_seller: fast drawdown, cut risk",
+            }
+        return {"action": "hold", "confidence": 0.55, "rationale": "panic_seller: no drawdown trigger"}
 
     def heuristic(self, market_state, memory) -> dict:
         if market_state["price_delta_pct"] < -0.10:
-            return {"action": "SELL", "amount": memory["portfolio"] * 0.3}
-        return {"action": "HOLD"}
+            return {
+                "action": "sell",
+                "amount": memory["portfolio"] * 0.3,
+                "confidence": 0.74,
+                "rationale": "panic_seller: heuristic drawdown trigger",
+            }
+        return {"action": "hold", "confidence": 0.5, "rationale": "panic_seller: hold band"}
 
 
 engine = SwarmEngine(archetypes=[PanicSeller], count=100)

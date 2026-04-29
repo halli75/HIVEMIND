@@ -23,6 +23,10 @@ from uniswap_client import (
 )
 
 
+DEFAULT_AMOUNT_IN_WEI = int(Decimal("0.001") * Decimal(10**18))
+ALLOW_SWAP_ENV = "HIVEMIND_ALLOW_TESTNET_SWAP"
+
+
 def _format_amount_out(quote: dict, fallback_decimals: int = 6) -> str:
     inner = quote.get("quote") or {}
     decimals_str = inner.get("amountOutDecimals")
@@ -34,8 +38,22 @@ def _format_amount_out(quote: dict, fallback_decimals: int = 6) -> str:
     return str(Decimal(int(raw)) / (Decimal(10) ** fallback_decimals))
 
 
+def _amount_in_wei() -> int:
+    value = os.environ.get("UNISWAP_AMOUNT_IN_WEI", "").strip()
+    if not value:
+        return DEFAULT_AMOUNT_IN_WEI
+    amount = int(value)
+    if amount <= 0:
+        raise ValueError("UNISWAP_AMOUNT_IN_WEI must be positive")
+    return amount
+
+
 async def main() -> int:
     load_dotenv()
+
+    if os.environ.get(ALLOW_SWAP_ENV, "").strip().lower() not in {"1", "true", "yes"}:
+        print(f"{ALLOW_SWAP_ENV}=true is required before submitting a Sepolia swap.", file=sys.stderr)
+        return 1
 
     api_key = os.environ.get("UNISWAP_API_KEY", "").strip()
     base_url = os.environ.get(
@@ -54,7 +72,11 @@ async def main() -> int:
         return 1
 
     swapper = Account.from_key(private_key).address
-    amount_in = int(Decimal("0.001") * Decimal(10**18))
+    try:
+        amount_in = _amount_in_wei()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     client = UniswapClient(api_key=api_key, base_url=base_url, rpc_url=rpc_url)
     try:

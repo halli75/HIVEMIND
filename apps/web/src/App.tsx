@@ -1,4 +1,17 @@
 import { useMemo, useState } from "react";
+import { InferenceMetrics } from "./components/InferenceMetrics";
+import { SwarmGraph } from "./components/SwarmGraph";
+import type {
+  AgentStatus,
+  AgentTier,
+  ConnectionBadge,
+  LeaderboardEntry,
+  RunTranscript,
+  SwarmAgent,
+  SwarmMetrics,
+} from "./types";
+import { useSwarmStream } from "./useSwarmStream";
+
 const CRYSTALLIZE_API_URL =
   (import.meta.env.VITE_HIVEMIND_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
@@ -9,11 +22,23 @@ type CrystallizedAgent = {
   archetype: string | null;
   composite_score: number | null;
   owner: string;
+  chain?: string;
+  explorer?: string | null;
 };
 
 const TX_EXPLORERS = {
-  zerog: (hash: string) => `https://chainscan.0g.ai/tx/${hash}`,
+  zerog: (hash: string) => `https://chainscan-galileo.0g.ai/tx/${hash}`,
   sepolia: (hash: string) => `https://sepolia.etherscan.io/tx/${hash}`,
+};
+
+const explorerFor = (entry: CrystallizedAgent) => {
+  if (entry.explorer) return entry.explorer;
+  if (entry.storage_ref.startsWith("mock://")) return null;
+  if (entry.chain === "sepolia") return TX_EXPLORERS.sepolia(entry.tx_hash);
+  if (entry.chain === "0g-galileo" || entry.storage_ref.startsWith("0g://")) {
+    return TX_EXPLORERS.zerog(entry.tx_hash);
+  }
+  return null;
 };
 
 function CrystallizePanel({
@@ -52,11 +77,6 @@ function CrystallizePanel({
     }
   };
 
-  const explorer = (hash: string) =>
-    hash.startsWith("0x") && hash.length === 66 && CRYSTALLIZE_API_URL.includes("0g")
-      ? TX_EXPLORERS.zerog(hash)
-      : TX_EXPLORERS.sepolia(hash);
-
   return (
     <section className="panel crystallize-panel" aria-labelledby="crystallize-heading">
       <div className="panel-heading">
@@ -76,42 +96,36 @@ function CrystallizePanel({
       {error ? <p className="connection-error">{error}</p> : null}
       {results && results.length > 0 ? (
         <div className="transcript-list">
-          {results.map((entry) => (
-            <div className="transcript-row" key={entry.token_id}>
-              <span>Token ID</span>
-              <strong>#{entry.token_id}</strong>
-              <span>Archetype</span>
-              <strong>{entry.archetype ?? "unknown"}</strong>
-              <span>Composite</span>
-              <strong>{entry.composite_score?.toFixed(4) ?? "—"}</strong>
-              <span>Tx</span>
-              <strong>
-                <a href={explorer(entry.tx_hash)} target="_blank" rel="noreferrer">
-                  {entry.tx_hash.slice(0, 12)}…
-                </a>
-              </strong>
-              <span>Storage</span>
-              <strong>{entry.storage_ref}</strong>
-            </div>
-          ))}
+          {results.map((entry) => {
+            const explorerHref = explorerFor(entry);
+            return (
+              <div className="transcript-row" key={entry.token_id}>
+                <span>Token ID</span>
+                <strong>#{entry.token_id}</strong>
+                <span>Archetype</span>
+                <strong>{entry.archetype ?? "unknown"}</strong>
+                <span>Composite</span>
+                <strong>{entry.composite_score?.toFixed(4) ?? "-"}</strong>
+                <span>Tx</span>
+                <strong>
+                  {explorerHref ? (
+                    <a href={explorerHref} target="_blank" rel="noreferrer">
+                      {entry.tx_hash.slice(0, 12)}...
+                    </a>
+                  ) : (
+                    `${entry.tx_hash.slice(0, 12)}...`
+                  )}
+                </strong>
+                <span>Storage</span>
+                <strong>{entry.storage_ref}</strong>
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </section>
   );
 }
-
-import type {
-  AgentStatus,
-  AgentTier,
-  ConnectionBadge,
-  LeaderboardEntry,
-  RunTranscript,
-  SwarmAgent,
-  SwarmMetrics,
-} from "./types";
-import { useSwarmStream } from "./useSwarmStream";
-import { SwarmGraph } from "./components/SwarmGraph";
-import { InferenceMetrics } from "./components/InferenceMetrics";
 
 const tierLabels: Record<AgentTier, string> = {
   T1: "Tier 1 / 0G active",
