@@ -1,7 +1,8 @@
+import asyncio
 import json
 from pathlib import Path
 
-from hivemind_sdk import AxlMessage, Scenario, SwarmEngine, append_jsonl
+from hivemind_sdk import AxlMessage, Scenario, SwarmEngine, TokenBucket, append_jsonl
 
 
 def test_engine_is_deterministic_for_same_seed_and_scenario() -> None:
@@ -129,3 +130,45 @@ def test_engine_uses_local_axl_transcript_metrics(tmp_path: Path) -> None:
     assert snapshot.integrations.gensyn_axl["last_message_type"] == "TRADE_INTENT"
     assert snapshot.transcript["axl_p50_latency_ms"] == 12.5
     assert snapshot.proof["axl"]["transcript_path"] == str(transcript)
+
+
+def test_token_bucket_drain_and_refill() -> None:
+    fake_now = [1000.0]
+    bucket = TokenBucket(capacity=3, refill_rate=2.0, clock=lambda: fake_now[0])
+
+    assert bucket.try_consume() is True
+    assert bucket.try_consume() is True
+    assert bucket.try_consume() is True
+    assert bucket.try_consume() is False
+    assert bucket.remaining == 0
+
+    fake_now[0] += 1.0  # 1 second passes -> +2 tokens
+    assert bucket.try_consume() is True
+    assert bucket.try_consume() is True
+    assert bucket.try_consume() is False
+
+
+def test_engine_falls_back_to_heuristic_when_token_bucket_empty() -> None:
+    bucket = TokenBucket(capacity=2, refill_rate=0.001)
+    engine = SwarmEngine(agent_count=15, seed="rate-limit", token_bucket=bucket)
+
+    snapshot = asyncio.run(engine.run_async(ticks=1))
+
+    # Tier 1 is sized at 10 candidates but the bucket only had 2 tokens;
+    # the other 8 must have fallen through to the heuristic path.
+    assert engine.last_rate_limited_count == 8
+    assert len(engine.last_rate_limited_agents) == 8
+    assert engine.token_bucket_remaining == 0
+    # All 15 agents are still represented in the snapshot.
+    assert len(snapshot.agents) == 15
+    assert snapshot.transcript["rate_limited_count"] == 8
+    assert snapshot.transcript["token_bucket_capacity"] == 2
+
+
+def test_engine_records_zero_rate_limited_when_bucket_has_capacity() -> None:
+    engine = SwarmEngine(agent_count=8, seed="bucket-ok")
+
+    asyncio.run(engine.run_async(ticks=1))
+
+    assert engine.last_rate_limited_count == 0
+    assert engine.last_rate_limited_agents == ()

@@ -217,10 +217,19 @@ def create_app(
 
     @app.get("/metrics/tiers")
     async def tier_metrics() -> dict[str, Any]:
-        snapshot = app.state.engine.latest_snapshot
+        engine = app.state.engine
+        snapshot = engine.latest_snapshot
+        bucket = engine.token_bucket
+        rate_limited = engine.last_rate_limited_count
         return {
             "sequence": snapshot.sequence,
             "tier_metrics": [metric.to_dict() for metric in snapshot.tier_metrics],
+            "token_bucket_remaining": bucket.remaining,
+            "token_bucket_capacity": bucket.capacity,
+            "token_bucket_refill_rate": bucket.refill_rate,
+            "rate_limited_count": rate_limited,
+            "rate_limited": rate_limited > 0,
+            "rate_limited_agents": list(engine.last_rate_limited_agents),
         }
 
     @app.websocket("/ws/state")

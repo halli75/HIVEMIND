@@ -28,7 +28,7 @@ from .axl import (
     utc_now_iso,
 )
 from .axl_pool import AXLPoolManager
-from .engine import SwarmEngine
+from .engine import SwarmEngine, TokenBucket
 from .models import (
     AgentArchetype,
     AgentState,
@@ -83,6 +83,7 @@ __all__ = [
     "SwarmEngine",
     "SwarmSnapshot",
     "TierMetric",
+    "TokenBucket",
     "UniswapExecutionProvider",
     "Web3MintProvider",
     "Web3Provider",

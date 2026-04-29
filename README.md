@@ -22,6 +22,17 @@ Phase 2 local AXL proof is live:
 - `data`: deterministic seed snapshots for local simulation.
 - `docs`: architecture and integration notes for 0G, Gensyn AXL, and Uniswap.
 
+## AXL Benchmark Results
+
+Local Gensyn AXL coordinator benchmarks across 2- and 5-node clusters, sending 1,000 trade-intent and 1,000 market-signal messages per run (4,000 total deliveries, 2,000 sends per cluster). Source: [`apps/axl-node/benchmark_results.json`](apps/axl-node/benchmark_results.json).
+
+| Nodes | Messages Sent | Messages Received | Throughput (msgs/sec) | p50 Latency (ms) | p95 Latency (ms) | Duration (s) | Avg RSS (KB) |
+|------:|--------------:|------------------:|----------------------:|-----------------:|-----------------:|-------------:|-------------:|
+| 2     | 2,000         | 2,000             | 36,057                | 29.30            | 53.47            | 0.056        | 25,024       |
+| 5     | 2,000         | 2,000             | 38,547                | 28.52            | 51.34            | 0.052        | 25,712       |
+
+**What this means in plain English:** the swarm can move ~36,000–38,500 messages per second between AXL nodes, with the typical message arriving in under 30 milliseconds. That is fast enough for agents to coordinate trades in real time without the network being a bottleneck — and the throughput actually goes up slightly when the cluster grows from 2 to 5 nodes, which means the AXL routing scales cleanly as you add nodes instead of slowing down.
+
 ## hivemind-sdk — OpenClaw-Inspired Architecture
 
 hivemind-sdk's architecture is directly inspired by OpenClaw's agent framework. AgentArchetype mirrors OpenClaw's pluggable Skills system — subclass to define a new DeFi actor persona, register it with SwarmEngine, and it participates in the swarm immediately. SwarmEngine mirrors OpenClaw's Gateway — a single control plane orchestrating all agent instances, their memory state, 0G Compute inference scheduling, and Gensyn AXL communication pools. ScenarioInjector mirrors OpenClaw's session/messaging layer — the interface through which external events enter the system and propagate to all active instances. hivemind-sdk is OpenClaw's architectural DNA, applied to a DeFi-native multi-agent simulation context, deployed on 0G Compute and Storage infrastructure.
@@ -35,10 +46,13 @@ hivemind-sdk's architecture is directly inspired by OpenClaw's agent framework. 
 
 ## Quickstart
 
-Install the SDK in editable mode and run the official 18-line PanicSeller example:
+Five commands take you from a fresh clone to a running PanicSeller swarm:
 
 ```bash
+git clone https://github.com/<your-org>/HIVEMIND.git
+cd HIVEMIND
 pip install -e packages/hivemind-sdk
+cp .env.example .env
 HIVEMIND_USE_MOCK_INFERENCE=true python examples/panic_seller.py
 ```
 

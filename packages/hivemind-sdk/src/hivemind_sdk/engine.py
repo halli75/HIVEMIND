@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -41,6 +42,64 @@ TIER1_SIZE = 10
 TIER2_FRACTION = 0.18
 TIER1_COOLDOWN_TICKS = 2
 TIER1_SEMAPHORE = 10
+TOKEN_BUCKET_CAPACITY = 10
+TOKEN_BUCKET_REFILL_RATE = 10.0
+
+
+class TokenBucket:
+    """Token-bucket rate limiter for Tier 1 (0G Compute) inference calls.
+
+    Default config (``capacity=10``, ``refill_rate=10`` tokens/sec) lets up to
+    10 calls burst, then sustains ~10 calls per second. ``try_consume`` returns
+    False when the bucket is empty so the caller can fall back to the cheaper
+    Tier 2 heuristic path instead of stalling on the upstream API.
+    """
+
+    def __init__(
+        self,
+        capacity: int = TOKEN_BUCKET_CAPACITY,
+        refill_rate: float = TOKEN_BUCKET_REFILL_RATE,
+        *,
+        clock: callable = time.monotonic,
+    ) -> None:
+        if capacity <= 0:
+            raise ValueError("capacity must be positive")
+        if refill_rate <= 0:
+            raise ValueError("refill_rate must be positive")
+        self._capacity = capacity
+        self._refill_rate = refill_rate
+        self._clock = clock
+        self._tokens = float(capacity)
+        self._last_refill = clock()
+
+    def _refill(self) -> None:
+        now = self._clock()
+        elapsed = now - self._last_refill
+        if elapsed > 0:
+            self._tokens = min(
+                self._capacity, self._tokens + elapsed * self._refill_rate
+            )
+            self._last_refill = now
+
+    def try_consume(self, n: int = 1) -> bool:
+        self._refill()
+        if self._tokens >= n:
+            self._tokens -= n
+            return True
+        return False
+
+    @property
+    def remaining(self) -> int:
+        self._refill()
+        return int(self._tokens)
+
+    @property
+    def capacity(self) -> int:
+        return self._capacity
+
+    @property
+    def refill_rate(self) -> float:
+        return self._refill_rate
 
 
 @dataclass(frozen=True)
@@ -101,6 +160,7 @@ class SwarmEngine:
         axl_node_urls: list[str] | None = None,
         axl_pool_id: str = "hivemind-main",
         axl_agent_id: str = "hivemind-engine",
+        token_bucket: TokenBucket | None = None,
     ) -> None:
         if agent_count is not None and count is not None and agent_count != count:
             raise ValueError("pass either agent_count or count, not both")
@@ -158,6 +218,9 @@ class SwarmEngine:
         self._axl_agent_id = axl_agent_id
         self._axl_pool: AXLPoolManager | None = None
         self._axl_urgency_boost: dict[str, float] = {}
+        self._token_bucket = token_bucket or TokenBucket()
+        self._last_rate_limited_count: int = 0
+        self._last_rate_limited_agents: tuple[str, ...] = ()
         self._snapshot = self.inject_scenario(Scenario.neutral())
         if transcript_root is not None:
             self._transcript_recorder = FileTranscriptRecorder(transcript_root)
@@ -169,6 +232,22 @@ class SwarmEngine:
     @property
     def run_mode(self) -> RunMode:
         return self._run_mode
+
+    @property
+    def token_bucket(self) -> TokenBucket:
+        return self._token_bucket
+
+    @property
+    def token_bucket_remaining(self) -> int:
+        return self._token_bucket.remaining
+
+    @property
+    def last_rate_limited_count(self) -> int:
+        return self._last_rate_limited_count
+
+    @property
+    def last_rate_limited_agents(self) -> tuple[str, ...]:
+        return self._last_rate_limited_agents
 
     def inject_scenario(self, scenario: Scenario) -> SwarmSnapshot:
         self._sequence += 1
@@ -455,12 +534,30 @@ class SwarmEngine:
             else:
                 self._axl_urgency_boost[agent_id] = decayed
 
-        tier1, tier2, tier3 = self._assign_tiers(active_scenario)
+        tier1_proposed, tier2, tier3 = self._assign_tiers(active_scenario)
+
+        # Token-bucket gate: agents that can't get a token fall through to the
+        # cheaper Tier 2 heuristic path for this tick instead of blocking on
+        # the upstream 0G Compute API.
+        tier1_admitted: list[_AgentIdentity] = []
+        tier1_rate_limited: list[_AgentIdentity] = []
+        for agent in tier1_proposed:
+            if self._token_bucket.try_consume():
+                tier1_admitted.append(agent)
+            else:
+                tier1_rate_limited.append(agent)
+
+        self._last_rate_limited_count = len(tier1_rate_limited)
+        self._last_rate_limited_agents = tuple(a.agent_id for a in tier1_rate_limited)
+        tier1 = tier1_admitted
 
         semaphore = asyncio.Semaphore(TIER1_SEMAPHORE)
         tier1_results = await asyncio.gather(
             *(self._tier1_evaluate(a, active_scenario, semaphore) for a in tier1)
         )
+        rate_limited_results = [
+            self._tier2_evaluate(a, active_scenario) for a in tier1_rate_limited
+        ]
         tier2_results = [self._tier2_evaluate(a, active_scenario) for a in tier2]
         tier3_results = [self._tier3_evaluate(a, active_scenario) for a in tier3]
 
@@ -469,12 +566,18 @@ class SwarmEngine:
             self._cooldown_until[agent.agent_id] = self._tick_index + TIER1_COOLDOWN_TICKS
             self._last_action[agent.agent_id] = state.action
             self._last_pnl_bps[agent.agent_id] = state.pnl_bps
-        for agent, state in list(zip(tier2, tier2_results)) + list(zip(tier3, tier3_results)):
+        for agent, state in (
+            list(zip(tier1_rate_limited, rate_limited_results))
+            + list(zip(tier2, tier2_results))
+            + list(zip(tier3, tier3_results))
+        ):
             self._last_action[agent.agent_id] = state.action
             self._last_pnl_bps[agent.agent_id] = state.pnl_bps
 
         agent_states_by_id: dict[str, AgentState] = {}
         for agent, state in zip(tier1, tier1_results):
+            agent_states_by_id[agent.agent_id] = state
+        for agent, state in zip(tier1_rate_limited, rate_limited_results):
             agent_states_by_id[agent.agent_id] = state
         for agent, state in zip(tier2, tier2_results):
             agent_states_by_id[agent.agent_id] = state
@@ -486,11 +589,18 @@ class SwarmEngine:
         tier_metrics = self._build_tier_metrics(agent_states, active_scenario)
         integrations = self._integration_envelope(active_scenario, agent_states, leaderboard)
         transcript = self._build_transcript(active_scenario, integrations)
+        transcript = {
+            **transcript,
+            "rate_limited_count": self._last_rate_limited_count,
+            "rate_limited_agents": list(self._last_rate_limited_agents),
+            "token_bucket_remaining": self._token_bucket.remaining,
+            "token_bucket_capacity": self._token_bucket.capacity,
+        }
         proof = self._build_proof(active_scenario, leaderboard, integrations, transcript)
         event_log = (
             f"tick:{self._tick_index}",
             f"scenario:{active_scenario.scenario_id}",
-            f"tier1:{len(tier1)} tier2:{len(tier2)} tier3:{len(tier3)}",
+            f"tier1:{len(tier1)} tier2:{len(tier2)} tier3:{len(tier3)} rate_limited:{self._last_rate_limited_count}",
             f"axl:{integrations.gensyn_axl['mode']}:messages:{integrations.gensyn_axl['messages']}",
         )
 
