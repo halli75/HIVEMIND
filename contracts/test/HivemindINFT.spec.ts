@@ -95,6 +95,29 @@ describe("HivemindINFT", function () {
     assert.equal(sealedEvents[0].args[0], 1n); // tokenId
   });
 
+  it("ERC-7857: transfer rejects non-owner callers", async function () {
+    const { inft, winner, other } = await deploy();
+
+    await (await inft.mintAgent(
+      winner.address,
+      "0g://storage/hivemind/test-agent.json",
+      STORAGE_HASH,
+      "test-model",
+      "sha256:test-digest",
+      5000
+    )).wait();
+
+    const sealedKey = ethers.hexlify(ethers.randomBytes(32));
+    const proof = ethers.hexlify(ethers.randomBytes(16));
+    const inftAsOther = inft.connect(other) as unknown as typeof inft;
+
+    await assert.rejects(
+      () => (inftAsOther as any).transfer(winner.address, other.address, 1, sealedKey, proof),
+      /NotTokenOwner/
+    );
+    assert.equal(await inft.ownerOf(1), winner.address);
+  });
+
   it("ERC-7857: clone creates new token with same metadata and emits MetadataUpdated", async function () {
     const { inft, deployer, winner, other } = await deploy();
     const deploymentBlock = await ethers.provider.getBlockNumber();

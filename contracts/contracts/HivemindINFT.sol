@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 /// @title HivemindINFT
-/// @notice Minimal ERC-7857 iNFT for HIVEMIND — records the winning agent with
+/// @notice Minimal ERC-7857 iNFT for HIVEMIND - records the winning agent with
 /// encrypted strategy on 0G Storage. Implements ERC-7857 transfer/clone/authorizeUsage
 /// at hackathon level (proof arg accepted; TEE/ZKP verification deferred).
 contract HivemindINFT {

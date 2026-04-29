@@ -1,5 +1,5 @@
 /**
- * mint-inft.ts — Encrypt winning agent strategy, upload to 0G Storage, mint ERC-7857 iNFT.
+ * mint-inft.ts - Encrypt winning agent strategy, upload to 0G Storage, mint ERC-7857 iNFT.
  *
  * Usage:
  *   npm run mint                     # reads winning agent from HIVEMIND_API_URL/state
@@ -15,7 +15,7 @@
  * Optional:
  *   MINT_MOCK=1                      Use hardcoded demo agent instead of live API
  *   MINT_MOCK_STORAGE=1              Allow minting even when 0G Storage upload fails
- *                                    (uses sha256 content-hash URI as fallback — for testing only)
+ *                                    (uses sha256 content-hash URI as fallback - for testing only)
  */
 
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
@@ -125,7 +125,7 @@ async function fetchWinner(mock: boolean): Promise<AgentWinner> {
 // ---------------------------------------------------------------------------
 interface EncryptResult {
   encryptedBuffer: Buffer;
-  contentHash: string;   // hex sha256 of encrypted buffer → on-chain bytes32
+  contentHash: string;   // hex sha256 of encrypted buffer -> on-chain bytes32
   key: string;           // hex AES key (saved locally for demo decryption)
   iv: string;            // hex IV
   authTag: string;       // hex GCM auth tag
@@ -181,7 +181,7 @@ async function uploadToZeroGStorage(
   try {
     const { ZgFile, Indexer } = await import("@0glabs/0g-ts-sdk");
 
-    // ZgFile requires a file path — write temp file
+    // ZgFile requires a file path - write temp file
     tempFile = join(tmpdir(), `hivemind-${contentHash}.enc`);
     writeFileSync(tempFile, encryptedBuffer);
 
@@ -214,7 +214,7 @@ async function uploadToZeroGStorage(
     }
     // Mock-storage mode: fall back to content-hash URI for local testing
     console.warn(`  [MOCK_STORAGE] Upload failed: ${sdkErr}`);
-    console.warn(`  [MOCK_STORAGE] Using sha256 fallback URI — not a real 0G Storage upload.`);
+    console.warn(`  [MOCK_STORAGE] Using sha256 fallback URI - not a real 0G Storage upload.`);
     const storageUri = `0g://storage/hivemind/${contentHash}`;
     return { storageUri, uploadTxHash: null, rootHash: contentHash };
   } finally {
@@ -299,7 +299,7 @@ async function main() {
 
   console.log("\n=== HIVEMIND iNFT Mint ===");
   console.log(`  Mode:    ${isMock ? "mock (demo agent)" : "live (from API)"}`);
-  console.log(`  Storage: ${isMockStorage ? "MOCK (sha256 fallback — not a real upload)" : "live (0G Storage)"}`);
+  console.log(`  Storage: ${isMockStorage ? "MOCK (sha256 fallback - not a real upload)" : "live (0G Storage)"}`);
   console.log(`  Network: 0G Galileo (chainId 16602)`);
   console.log();
 
