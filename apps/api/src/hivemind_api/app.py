@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from hivemind_sdk import (
     CrystallizationPipeline,
+    ExecutionProvider,
     HybridInferenceProvider,
     LocalAxlMessageBus,
     LocalInferenceProvider,
@@ -18,6 +19,7 @@ from hivemind_sdk import (
     Scenario,
     ScoringEngine,
     SwarmEngine,
+    UniswapExecutionProvider,
     ZeroGComputeInferenceProvider,
 )
 
@@ -60,6 +62,49 @@ def _build_crystallization_pipeline() -> CrystallizationPipeline:
         storage_provider=LocalStorageUploadProvider(),
         web3_provider=MockWeb3Provider(),
         owner_address=owner_address,
+    )
+
+
+def _build_execution_provider() -> ExecutionProvider | None:
+    """Return a live UniswapExecutionProvider or None (falls back to LocalExecutionProvider)."""
+    use_mock = os.environ.get("HIVEMIND_USE_MOCK_UNISWAP", "true").lower() in {"1", "true", "yes"}
+    if use_mock:
+        return None
+
+    api_key = os.environ.get("UNISWAP_API_KEY", "").strip()
+    base_url = os.environ.get("UNISWAP_API_BASE_URL", "https://trade-api.gateway.uniswap.org").strip()
+    rpc_url = os.environ.get("SEPOLIA_RPC_URL", "https://ethereum-sepolia-rpc.publicnode.com").strip()
+    private_key = os.environ.get("WALLET_PRIVATE_KEY", "").strip()
+
+    if not api_key or not private_key:
+        import warnings
+        warnings.warn(
+            "HIVEMIND_USE_MOCK_UNISWAP=false but UNISWAP_API_KEY or WALLET_PRIVATE_KEY "
+            "is missing — falling back to mock execution provider",
+            stacklevel=2,
+        )
+        return None
+
+    import sys as _sys
+    _exec_root = str(Path(__file__).resolve().parents[4] / "execution")
+    if _exec_root not in _sys.path:
+        _sys.path.insert(0, _exec_root)
+
+    from uniswap_client import UniswapClient, SEPOLIA_WETH, SEPOLIA_USDC  # type: ignore[import-not-found]
+    from eth_account import Account  # type: ignore[import-not-found]
+
+    token_in = os.environ.get("UNISWAP_TOKEN_IN_ADDRESS", SEPOLIA_WETH).strip() or SEPOLIA_WETH
+    token_out = os.environ.get("UNISWAP_TOKEN_OUT_ADDRESS", SEPOLIA_USDC).strip() or SEPOLIA_USDC
+    amount_in_wei = int(os.environ.get("UNISWAP_AMOUNT_IN_WEI", "1000000000000000"))
+    swapper = Account.from_key(private_key).address
+
+    client = UniswapClient(api_key=api_key, base_url=base_url, rpc_url=rpc_url)
+    return UniswapExecutionProvider(
+        client=client,
+        swapper_address=swapper,
+        token_in=token_in,
+        token_out=token_out,
+        amount_in_wei=amount_in_wei,
     )
 
 
@@ -135,6 +180,7 @@ def _default_engine(
     seed_snapshot_dir: str | Path | None = None,
     transcript_root: str | Path | None = None,
     axl_transcript_path: str | Path | None = None,
+    execution_provider: ExecutionProvider | None = None,
 ) -> SwarmEngine:
     root = _repo_root()
     seed_dir = _resolve_repo_path(
@@ -177,6 +223,7 @@ def _default_engine(
         message_bus=message_bus,
         run_mode=_compose_run_mode(local_axl=local_axl_enabled, live_0g=not use_mock_0g),
         inference_provider=inference_provider,
+        execution_provider=execution_provider,
     )
 
 
@@ -199,6 +246,7 @@ def create_app(
         seed_snapshot_dir=seed_snapshot_dir,
         transcript_root=transcript_root,
         axl_transcript_path=axl_transcript_path,
+        execution_provider=_build_execution_provider(),
     )
     app.state.websocket_hub = WebSocketHub()
     app.state.scoring_engine = ScoringEngine()
@@ -285,6 +333,60 @@ def create_app(
             "rate_limited_count": rate_limited,
             "rate_limited": rate_limited > 0,
             "rate_limited_agents": list(engine.last_rate_limited_agents),
+        }
+
+    @app.post("/mint")
+    async def mint_inft() -> dict[str, Any]:
+        """Trigger a real iNFT mint: encrypt → 0G Storage → mintAgent on 0G Galileo.
+
+        Delegates to contracts/scripts/mint-inft.ts via npm run mint.
+        Requires INFT_CONTRACT_ADDRESS, DEPLOYER_PRIVATE_KEY, ZERO_G_RPC_URL in env.
+        """
+        import asyncio as _asyncio
+        import re as _re
+
+        inft_address = os.environ.get("INFT_CONTRACT_ADDRESS", "").strip()
+        if not inft_address:
+            raise HTTPException(status_code=400, detail="INFT_CONTRACT_ADDRESS not set in environment")
+
+        contracts_dir = _repo_root() / "contracts"
+        if not contracts_dir.exists():
+            raise HTTPException(status_code=500, detail="contracts/ directory not found")
+
+        npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
+        env = {**os.environ, "HIVEMIND_API_URL": "http://localhost:8000"}
+
+        try:
+            proc = await _asyncio.create_subprocess_exec(
+                npm_cmd, "run", "mint",
+                cwd=str(contracts_dir),
+                env=env,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await _asyncio.wait_for(proc.communicate(), timeout=120)
+        except _asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Mint script timed out after 120s")
+
+        output = stdout.decode("utf-8", errors="replace")
+
+        if proc.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Mint script exited {proc.returncode}:\n{output[-2000:]}",
+            )
+
+        token_id_match = _re.search(r"Token ID:\s*(\d+)", output)
+        tx_match = _re.search(r"Tx:\s*(https?://\S+)", output)
+        storage_match = _re.search(r"Storage:\s*(https?://\S+)", output)
+
+        return {
+            "status": "minted",
+            "token_id": int(token_id_match.group(1)) if token_id_match else None,
+            "tx_url": tx_match.group(1) if tx_match else None,
+            "storage_url": storage_match.group(1) if storage_match else None,
+            "contract": inft_address,
+            "output": output[-3000:],
         }
 
     @app.websocket("/ws/state")

@@ -420,15 +420,20 @@ class UniswapExecutionProvider:
     ) -> dict[str, Any]:
         import asyncio
 
-        quote = asyncio.run(
-            self._client.get_quote(
-                self._token_in,
-                self._token_out,
-                self._amount_in_wei,
-                chain_id=self._chain_id,
-                recipient=self._swapper_address,
-            )
-        )
+        # asyncio.run() fails when called from inside a running event loop (e.g.
+        # FastAPI async route). Run in a fresh thread instead — ThreadPoolExecutor
+        # is already imported for HybridInferenceProvider.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            quote = pool.submit(
+                asyncio.run,
+                self._client.get_quote(
+                    self._token_in,
+                    self._token_out,
+                    self._amount_in_wei,
+                    chain_id=self._chain_id,
+                    recipient=self._swapper_address,
+                ),
+            ).result()
         inner = quote.get("quote") or {}
         quote_id = inner.get("quoteId") or quote.get("quoteId") or f"uni-quote-{state_digest[:8]}"
         route = inner.get("route") or quote.get("route") or ["WETH", "USDC"]
