@@ -132,6 +132,7 @@ def test_default_app_can_read_local_axl_transcript(tmp_path: Path, monkeypatch) 
     monkeypatch.setenv("HIVEMIND_USE_MOCK_GENSYN", "false")
     monkeypatch.setenv("HIVEMIND_USE_MOCK_0G", "true")
     monkeypatch.setenv("HIVEMIND_USE_MOCK_UNISWAP", "true")
+    monkeypatch.delenv("AXL_NODE_URLS", raising=False)
     client = TestClient(
         create_app(
             seed_snapshot_dir=tmp_path / "missing-seeds",
@@ -216,6 +217,7 @@ def test_default_app_composes_local_axl_and_live_0g_run_mode(tmp_path: Path, mon
     monkeypatch.setenv("ZERO_G_COMPUTE_API_BASE_URL", "https://fake-0g.example.com")
     monkeypatch.setenv("ZERO_G_COMPUTE_BEARER_TOKEN", "tok-test")
     monkeypatch.setenv("ZERO_G_COMPUTE_TOP_N", "1")
+    monkeypatch.delenv("AXL_NODE_URLS", raising=False)
 
     with patch("httpx.post", return_value=mock_resp):
         client = TestClient(
