@@ -126,13 +126,30 @@ class UniswapClient:
             )
         return resp.json()
 
-    async def build_swap_tx(self, quote: dict[str, Any]) -> dict[str, Any]:
-        resp = await self._http.post(f"{self._base_url}/v1/swap", json=quote)
+    async def build_swap_tx(self, quote: dict[str, Any], *, signature: str | None = None) -> dict[str, Any]:
+        body = dict(quote)
+        if signature:
+            body["signature"] = signature
+        resp = await self._http.post(f"{self._base_url}/v1/swap", json=body)
         if resp.status_code >= 400:
             raise RuntimeError(
                 f"Uniswap /v1/swap failed: {resp.status_code} {resp.text}"
             )
         return resp.json()
+
+    def _sign_permit(self, permit_data: dict[str, Any], wallet_private_key: str) -> str:
+        """Sign a Permit2 EIP-712 permitData object and return the hex signature."""
+        account = Account.from_key(wallet_private_key)
+        domain = permit_data["domain"]
+        types = permit_data["types"]
+        values = permit_data["values"]
+        signed = account.sign_typed_data(
+            domain_data=domain,
+            message_types=types,
+            message_data=values,
+        )
+        sig = signed.signature.hex()
+        return sig if sig.startswith("0x") else "0x" + sig
 
     async def execute_swap(
         self,
@@ -143,7 +160,14 @@ class UniswapClient:
             raise ValueError("wallet_private_key is required")
 
         account = Account.from_key(wallet_private_key)
-        swap_resp = await self.build_swap_tx(quote)
+
+        # Sign Permit2 EIP-712 data if included in quote response
+        signature = None
+        permit_data = quote.get("permitData")
+        if permit_data and permit_data.get("values"):
+            signature = self._sign_permit(permit_data, wallet_private_key)
+
+        swap_resp = await self.build_swap_tx(quote, signature=signature)
         swap_tx = swap_resp.get("swap") or swap_resp.get("transaction") or swap_resp
 
         tx: dict[str, Any] = {
