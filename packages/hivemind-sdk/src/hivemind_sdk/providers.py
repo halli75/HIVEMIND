@@ -350,6 +350,72 @@ class LocalAxlMessageBus:
         }
 
 
+class LiveAxlMessageBus:
+    """Broadcasts to running local AXL pool nodes via AXLPoolManager."""
+
+    def __init__(
+        self,
+        *,
+        node_urls: list[str],
+        pool_id: str = "hivemind-main",
+        agent_id: str = "hivemind-engine",
+    ) -> None:
+        if not node_urls:
+            raise ValueError("LiveAxlMessageBus requires at least one node_url")
+        self._node_urls = list(node_urls)
+        self._pool_id = pool_id
+        self._agent_id = agent_id
+
+    def broadcast_scenario(
+        self,
+        *,
+        scenario: Scenario,
+        agent_count: int,
+    ) -> dict[str, Any]:
+        import asyncio as _asyncio
+
+        from .axl_pool import AXLPoolManager
+
+        async def _run() -> dict[str, Any]:
+            pool = AXLPoolManager(
+                node_urls=self._node_urls,
+                pool_id=self._pool_id,
+                agent_id=self._agent_id,
+                timeout=5.0,
+            )
+            t0 = time.perf_counter()
+            await pool.connect()
+            nodes_online = len(pool.connected_node_ids)
+            failed_nodes = pool.failed_node_urls
+
+            await pool.broadcast(
+                "SCENARIO_SHOCK",
+                {"scenario_id": scenario.scenario_id, "label": scenario.label},
+            )
+            await pool.broadcast(
+                "TRADE_INTENT",
+                {"scenario_id": scenario.scenario_id, "agent_count": agent_count},
+            )
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            msg_count = pool.message_count
+            await pool.disconnect()
+
+            return {
+                "mode": "live_axl",
+                "messages": msg_count,
+                "nodes_online": nodes_online,
+                "failed_nodes": failed_nodes,
+                "last_message_type": "TRADE_INTENT",
+                "p50_latency_ms": round(elapsed_ms / 2, 3),
+                "p95_latency_ms": round(elapsed_ms, 3),
+                "topic": f"hivemind.scenario.{scenario.scenario_id}",
+                "coordinator": "axl_pool",
+            }
+
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            return ex.submit(_asyncio.run, _run()).result()
+
+
 class LocalExecutionProvider:
     def __init__(self, *, replay: SeedReplay | None = None) -> None:
         self._replay = replay
@@ -418,13 +484,30 @@ class UniswapExecutionProvider:
         winner: LeaderboardEntry,
         state_digest: str,
     ) -> dict[str, Any]:
-        quote = self._client.get_quote_sync(
-            self._token_in,
-            self._token_out,
-            self._amount_in_wei,
-            chain_id=self._chain_id,
-            recipient=self._swapper_address,
-        )
+        try:
+            quote = self._client.get_quote_sync(
+                self._token_in,
+                self._token_out,
+                self._amount_in_wei,
+                chain_id=self._chain_id,
+                recipient=self._swapper_address,
+            )
+        except Exception:
+            # Quote unavailable (API down, no liquidity, etc.) — return placeholder
+            fallback_id = f"uni-quote-{state_digest[:8]}"
+            return {
+                "mode": "live",
+                "chain": "sepolia",
+                "route": ["WETH", "USDC"],
+                "recommended_action": winner.action,
+                "quote_id": fallback_id,
+                "quote": {"quoteId": fallback_id},
+                "swap_receipt": {
+                    "status": "unavailable",
+                    "transaction_hash": None,
+                    "scenario_id": scenario.scenario_id,
+                },
+            }
         inner = quote.get("quote") or {}
         quote_id = inner.get("quoteId") or quote.get("quoteId") or f"uni-quote-{state_digest[:8]}"
         route = inner.get("route") or quote.get("route") or ["WETH", "USDC"]

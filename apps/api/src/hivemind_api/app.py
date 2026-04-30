@@ -4,6 +4,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
+except ImportError:
+    pass
+
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -12,6 +18,7 @@ from hivemind_sdk import (
     CrystallizationPipeline,
     ExecutionProvider,
     HybridInferenceProvider,
+    LiveAxlMessageBus,
     LocalAxlMessageBus,
     LocalInferenceProvider,
     LocalStorageUploadProvider,
@@ -191,14 +198,15 @@ def _use_mock_0g() -> bool:
     return True
 
 
-def _compose_run_mode(*, local_axl: bool, live_0g: bool) -> str | None:
-    if local_axl and live_0g:
-        return "local_axl+live_0g"
-    if local_axl:
-        return "local_axl"
+def _compose_run_mode(*, local_axl: bool, live_axl: bool, live_0g: bool) -> str | None:
+    parts = []
+    if live_axl:
+        parts.append("live_axl")
+    elif local_axl:
+        parts.append("local_axl")
     if live_0g:
-        return "live_0g"
-    return None
+        parts.append("live_0g")
+    return "+".join(parts) if parts else None
 
 
 def _default_engine(
@@ -218,11 +226,19 @@ def _default_engine(
     use_mock_0g = _use_mock_0g()
     message_bus = None
     local_axl_enabled = False
-    if transcript_path_value and not use_mock_gensyn:
-        transcript_path = _resolve_repo_path(root, transcript_path_value)
-        if transcript_path.exists() and transcript_path.suffix == ".jsonl":
-            message_bus = LocalAxlMessageBus(transcript_path=transcript_path)
-            local_axl_enabled = True
+    live_axl_enabled = False
+    if not use_mock_gensyn:
+        axl_node_urls_str = os.environ.get("AXL_NODE_URLS", "").strip()
+        axl_node_urls = [u.strip() for u in axl_node_urls_str.split(",") if u.strip()] if axl_node_urls_str else []
+        if axl_node_urls:
+            axl_pool_id = os.environ.get("AXL_POOL_ID", "hivemind-main")
+            message_bus = LiveAxlMessageBus(node_urls=axl_node_urls, pool_id=axl_pool_id)
+            live_axl_enabled = True
+        elif transcript_path_value:
+            transcript_path = _resolve_repo_path(root, transcript_path_value)
+            if transcript_path.exists() and transcript_path.suffix == ".jsonl":
+                message_bus = LocalAxlMessageBus(transcript_path=transcript_path)
+                local_axl_enabled = True
     inference_provider: LocalInferenceProvider | HybridInferenceProvider
     if not use_mock_0g:
         api_base_url = os.environ.get("ZERO_G_COMPUTE_API_BASE_URL")
@@ -247,7 +263,7 @@ def _default_engine(
         seed_snapshot_dir=seed_dir,
         transcript_root=runs_dir,
         message_bus=message_bus,
-        run_mode=_compose_run_mode(local_axl=local_axl_enabled, live_0g=not use_mock_0g),
+        run_mode=_compose_run_mode(local_axl=local_axl_enabled, live_axl=live_axl_enabled, live_0g=not use_mock_0g),
         inference_provider=inference_provider,
         execution_provider=execution_provider,
     )

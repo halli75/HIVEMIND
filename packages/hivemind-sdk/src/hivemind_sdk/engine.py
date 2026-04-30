@@ -467,6 +467,7 @@ class SwarmEngine:
     ) -> dict[str, object]:
         return {
             "latest_scenario": scenario.to_dict(),
+            "axl_mode": integrations.gensyn_axl.get("mode", "mock"),
             "axl_message_count": integrations.gensyn_axl["messages"],
             "axl_nodes_online": integrations.gensyn_axl.get("nodes_online", 0),
             "axl_failed_nodes": integrations.gensyn_axl.get("failed_nodes", []),
@@ -488,6 +489,7 @@ class SwarmEngine:
         return {
             "latest_scenario": scenario.to_dict(),
             "axl": {
+                "mode": transcript.get("axl_mode", "mock"),
                 "message_count": transcript["axl_message_count"],
                 "nodes_online": transcript["axl_nodes_online"],
                 "failed_nodes": transcript["axl_failed_nodes"],
