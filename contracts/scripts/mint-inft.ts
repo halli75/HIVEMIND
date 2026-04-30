@@ -38,6 +38,15 @@ const API_URL = process.env.HIVEMIND_API_URL || "http://localhost:8000";
 const CONTRACT_ADDRESS = process.env.INFT_CONTRACT_ADDRESS;
 const STORAGE_MAX_ATTEMPTS = positiveIntFromEnv("MINT_STORAGE_MAX_ATTEMPTS", 4);
 const STORAGE_RETRY_BASE_MS = positiveIntFromEnv("MINT_STORAGE_RETRY_BASE_MS", 1500);
+// Comma-separated fallback node URLs used when the indexer HTTP API is unavailable.
+// e.g. ZERO_G_STORAGE_NODE_URLS=http://34.83.53.209:5678,http://34.169.28.106:5678
+const STORAGE_DIRECT_NODE_URLS: string[] = (process.env.ZERO_G_STORAGE_NODE_URLS ?? "")
+  .split(",")
+  .map((u) => u.trim())
+  .filter(Boolean);
+// Flow contract address reported by the storage nodes (fallback when indexer is down).
+const STORAGE_FLOW_ADDRESS =
+  process.env.ZERO_G_FLOW_ADDRESS || "0x22e03a6a89b950f1c82ec5e74f8eca321a105296";
 
 const HIVEMIND_INFT_ABI = [
   "function mintAgent(address to, string calldata storageUri, bytes32 storageHash, string calldata model, string calldata strategyDigest, uint64 aiq) external returns (uint256)",
@@ -222,12 +231,12 @@ async function uploadToZeroGStorage(
     const zgFile = await ZgFile.fromFilePath(tempFile);
     let result: { txHash: string; rootHash: string } | null = null;
     try {
+      const { Uploader, StorageNode, getFlowContract, defaultUploadOption } = await import("@0glabs/0g-ts-sdk");
       const indexer = new Indexer(INDEXER_URL);
       let lastErr: unknown = null;
       for (let attempt = 1; attempt <= STORAGE_MAX_ATTEMPTS; attempt += 1) {
         try {
           console.log(`  Storage upload attempt ${attempt}/${STORAGE_MAX_ATTEMPTS} ...`);
-          // upload returns [{txHash, rootHash}, Error | null]
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const [res, err] = await indexer.upload(zgFile, RPC_URL, signer as any);
           if (err) throw err;
@@ -243,6 +252,105 @@ async function uploadToZeroGStorage(
           console.warn(`  Retrying 0G Storage upload in ${delayMs}ms ...`);
           await sleep(delayMs);
         }
+      }
+      // If the indexer is unreachable and we have direct node URLs, bypass it.
+      if ((lastErr || !result) && isRetryableStorageError(lastErr) && STORAGE_DIRECT_NODE_URLS.length > 0) {
+        console.warn(`  Indexer unavailable — falling back to direct node upload (${STORAGE_DIRECT_NODE_URLS.join(", ")})`);
+        const nodes = STORAGE_DIRECT_NODE_URLS.map((url) => new StorageNode(url));
+
+        // The testnet Flow contract was upgraded: submit() now wraps Submission with sender address.
+        // New ABI: submit(((uint256,bytes,(bytes32,uint256)[]),address))
+        // Old SDK calls submit(Submission) which reverts — use a direct ethers call instead.
+        const { ethers: hreEthers } = await import("ethers");
+        const MARKET_ABI = ["function pricePerSector() view returns (uint256)"];
+        const NEW_FLOW_ABI = [
+          "function market() view returns (address)",
+          "function submit(((uint256,bytes,(bytes32,uint256)[]),address)) payable returns (uint256,bytes32,uint256,uint256)",
+        ];
+        const directProvider = new hreEthers.JsonRpcProvider(RPC_URL);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const newFlow = new hreEthers.Contract(STORAGE_FLOW_ADDRESS, NEW_FLOW_ABI, signer as any);
+
+        const [submission, subErr] = await zgFile.createSubmission("0x");
+        if (subErr || !submission) throw new Error(`createSubmission failed: ${subErr}`);
+
+        // Calculate fee
+        const mktAddr = await newFlow.market();
+        const mkt = new hreEthers.Contract(mktAddr, MARKET_ABI, directProvider);
+        const pricePerSector = await mkt.pricePerSector();
+        let fee = BigInt(0);
+        for (const node of submission.nodes) {
+          fee += BigInt(1 << Number(node.height)) * pricePerSector;
+        }
+        console.log(`  Submitting transaction with storage fee: ${fee}`);
+
+        // Build new-style submission: [[length, tags, nodes], senderAddress]
+        const signerAddr = await signer.getAddress();
+        const wrappedSubmission = [
+          [
+            submission.length,
+            submission.tags,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (submission.nodes as any[]).map((n) => [n.root, n.height]),
+          ],
+          signerAddr,
+        ];
+        const feeData = await directProvider.getFeeData();
+        const gasPrice = feeData.gasPrice ?? BigInt(4_000_000_007);
+        // 0G Galileo RPC underestimates gas for submit() — use 2× estimate with 800k floor.
+        let gasLimit: bigint;
+        try {
+          const gasEst = await newFlow.submit.estimateGas(wrappedSubmission, { value: fee });
+          gasLimit = gasEst * BigInt(2) > BigInt(800_000) ? gasEst * BigInt(2) : BigInt(800_000);
+        } catch {
+          gasLimit = BigInt(800_000);
+        }
+        console.log(`  Sending transaction with gas price ${gasPrice} gas limit ${gasLimit}`);
+        const txResp = await newFlow.submit(wrappedSubmission, { value: fee, gasPrice, gasLimit });
+        const txReceipt = await txResp.wait();
+        if (!txReceipt) throw new Error("Transaction receipt timeout");
+        const uploadTxHashDirect = txReceipt.hash as string;
+        console.log("  Transaction hash:", uploadTxHashDirect);
+
+        // Parse txSeq from the Submit event
+        const submitEventTopic = hreEthers.id(
+          "Submit(address,bytes32,uint256,uint256,uint256,(uint256,bytes,(bytes32,uint256)[]))"
+        );
+        let txSeq = -1;
+        for (const log of txReceipt.logs) {
+          if (log.topics[0] === submitEventTopic) {
+            txSeq = Number(BigInt("0x" + log.data.slice(2, 66)));
+            break;
+          }
+        }
+        if (txSeq < 0) throw new Error("Failed to get txSeq from Submit event");
+        console.log(`  Transaction sequence number: ${txSeq}`);
+
+        // Wait for storage nodes to index the submission (up to 60s)
+        console.log("  Wait for log entry on storage node");
+        let nodeInfo = null;
+        for (let i = 0; i < 30 && !nodeInfo; i++) {
+          await sleep(2000);
+          for (const node of nodes) {
+            try {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const info = await (node as any).getFileInfoByTxSeq(txSeq);
+              if (info) { nodeInfo = info; break; }
+            } catch { /* not yet indexed */ }
+          }
+        }
+        if (!nodeInfo) throw new Error("Log entry not found on storage nodes after 60s");
+
+        // Upload segments using Uploader with skipTx (submission already on-chain)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const dummyFlow = getFlowContract(STORAGE_FLOW_ADDRESS, signer as any);
+        const segUploader = new Uploader(nodes, RPC_URL, dummyFlow);
+        const [res, err] = await segUploader.uploadFile(zgFile, { ...defaultUploadOption, skipTx: true });
+        if (err) throw err;
+        if (!res) throw new Error("Direct node upload returned no result");
+        result = { txHash: uploadTxHashDirect, rootHash: res.rootHash };
+        lastErr = null;
+        console.log("  Direct node upload succeeded.");
       }
       if (lastErr || !result) {
         const cause = lastErr ?? new Error("0G Storage SDK returned no upload result");
