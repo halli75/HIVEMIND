@@ -255,12 +255,12 @@ async function uploadToZeroGStorage(
       }
       // If the indexer is unreachable and we have direct node URLs, bypass it.
       if ((lastErr || !result) && isRetryableStorageError(lastErr) && STORAGE_DIRECT_NODE_URLS.length > 0) {
-        console.warn(`  Indexer unavailable — falling back to direct node upload (${STORAGE_DIRECT_NODE_URLS.join(", ")})`);
+        console.warn(`  Indexer unavailable - falling back to direct node upload (${STORAGE_DIRECT_NODE_URLS.join(", ")})`);
         const nodes = STORAGE_DIRECT_NODE_URLS.map((url) => new StorageNode(url));
 
         // The testnet Flow contract was upgraded: submit() now wraps Submission with sender address.
         // New ABI: submit(((uint256,bytes,(bytes32,uint256)[]),address))
-        // Old SDK calls submit(Submission) which reverts — use a direct ethers call instead.
+        // Old SDK calls submit(Submission) which reverts; use a direct ethers call instead.
         const { ethers: hreEthers } = await import("ethers");
         const MARKET_ABI = ["function pricePerSector() view returns (uint256)"];
         const NEW_FLOW_ABI = [
@@ -280,7 +280,7 @@ async function uploadToZeroGStorage(
         const pricePerSector = await mkt.pricePerSector();
         let fee = BigInt(0);
         for (const node of submission.nodes) {
-          fee += BigInt(1 << Number(node.height)) * pricePerSector;
+          fee += (BigInt(1) << BigInt(node.height)) * pricePerSector;
         }
         console.log(`  Submitting transaction with storage fee: ${fee}`);
 
@@ -297,7 +297,7 @@ async function uploadToZeroGStorage(
         ];
         const feeData = await directProvider.getFeeData();
         const gasPrice = feeData.gasPrice ?? BigInt(4_000_000_007);
-        // 0G Galileo RPC underestimates gas for submit() — use 2× estimate with 800k floor.
+        // 0G Galileo RPC underestimates gas for submit(); use 2x estimate with 800k floor.
         let gasLimit: bigint;
         try {
           const gasEst = await newFlow.submit.estimateGas(wrappedSubmission, { value: fee });
@@ -345,6 +345,10 @@ async function uploadToZeroGStorage(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const dummyFlow = getFlowContract(STORAGE_FLOW_ADDRESS, signer as any);
         const segUploader = new Uploader(nodes, RPC_URL, dummyFlow);
+        // The direct submit above already produced the log entry, so force the SDK
+        // uploader to reuse it instead of retrying the old incompatible submit ABI.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (segUploader as any).findExistingFileInfo = async () => nodeInfo;
         const [res, err] = await segUploader.uploadFile(zgFile, { ...defaultUploadOption, skipTx: true });
         if (err) throw err;
         if (!res) throw new Error("Direct node upload returned no result");

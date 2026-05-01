@@ -13,12 +13,12 @@ import { useSwarmStream } from "./useSwarmStream";
 import { ARCHETYPE_COLORS, SwarmGraph } from "./components/SwarmGraph";
 import { InferenceMetrics } from "./components/InferenceMetrics";
 
-const CRYSTALLIZE_API_URL =
+const HIVEMIND_API_URL =
   (import.meta.env.VITE_HIVEMIND_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
-type CrystallizedAgent = {
-  token_id: number;
-  tx_hash: string;
+type MintedAgent = {
+  token_id: number | null;
+  tx_hash: string | null;
   storage_ref: string;
   archetype: string | null;
   composite_score: number | null;
@@ -32,8 +32,46 @@ const TX_EXPLORERS = {
   sepolia: (hash: string) => `https://sepolia.etherscan.io/tx/${hash}`,
 };
 
-const explorerFor = (entry: CrystallizedAgent) => {
+type MintResponse = {
+  status: string;
+  token_id?: number | null;
+  tx_hash?: string | null;
+  tx_url?: string | null;
+  storage_url?: string | null;
+  storage_uri?: string | null;
+  storage_hash?: string | null;
+  contract?: string | null;
+  proof?: {
+    token_id?: number | null;
+    tx_hash?: string | null;
+    storage_uri?: string | null;
+    storage_hash?: string | null;
+    contract_address?: string | null;
+    chain?: string | null;
+    tx_explorer?: string | null;
+  };
+};
+
+const errorMessageFromResponse = async (response: Response) => {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    const detail = body.detail;
+    if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object") {
+      const typed = detail as Record<string, unknown>;
+      const status = typeof typed.status === "string" ? typed.status : `HTTP ${response.status}`;
+      const message = typeof typed.message === "string" ? typed.message : response.statusText;
+      return `${status}: ${message}`;
+    }
+  } catch {
+    // Fall through to the generic status message.
+  }
+  return `POST /mint returned ${response.status}`;
+};
+
+const explorerFor = (entry: MintedAgent) => {
   if (entry.explorer) return entry.explorer;
+  if (!entry.tx_hash) return null;
   if (entry.storage_ref.startsWith("mock://")) return null;
   if (entry.chain === "sepolia") return TX_EXPLORERS.sepolia(entry.tx_hash);
   if (entry.chain === "0g-galileo" || entry.storage_ref.startsWith("0g://")) {
@@ -57,34 +95,36 @@ const statusLabels: Record<AgentStatus, string> = {
 
 const SCENARIO_PRESETS: { label: string; text: string }[] = [
   {
-    label: "🌊 Liquidity Crunch",
+    label: "Liquidity Crunch",
     text: "USDC liquidity drains 40% on Uniswap Sepolia within two blocks. Stable pools thin out, slippage triples, and arbitrageurs race to rebalance positions before quotes go stale.",
   },
   {
-    label: "📉 20% ETH Crash",
+    label: "20% ETH Crash",
     text: "ETH spot price drops 20% in five minutes after a major exchange outage. Funding rates spike, leveraged positions unwind, and conservative agents must de-risk into stablecoins.",
   },
   {
-    label: "⚡ Gas Spike",
-    text: "An NFT mint floods the mempool — base fee jumps from 8 gwei to 240 gwei for three blocks. Gas-aware agents must reprice or wait; impatient agents lose to slippage.",
+    label: "Gas Spike",
+    text: "An NFT mint floods the mempool - base fee jumps from 8 gwei to 240 gwei for three blocks. Gas-aware agents must reprice or wait; impatient agents lose to slippage.",
   },
 ];
 
 function formatComposite(score: number | null): string {
-  if (score === null) return "—";
+  if (score === null) return "-";
   if (score >= 0 && score <= 1) return `${(score * 100).toFixed(1)}%`;
   return score.toFixed(2);
 }
 
 function CrystallizePanel({
-  simulationRunId,
   apiAvailable,
+  mintConfigured,
+  winningEntry,
 }: {
-  simulationRunId: string;
   apiAvailable: boolean;
+  mintConfigured: boolean;
+  winningEntry: LeaderboardEntry | undefined;
 }) {
   const [isCrystallizing, setIsCrystallizing] = useState(false);
-  const [results, setResults] = useState<CrystallizedAgent[] | null>(null);
+  const [results, setResults] = useState<MintedAgent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [glow, setGlow] = useState(false);
@@ -98,23 +138,41 @@ function CrystallizePanel({
   }, [results]);
 
   const handleCrystallize = async () => {
-    if (!CRYSTALLIZE_API_URL) {
+    if (!HIVEMIND_API_URL) {
       setError("VITE_HIVEMIND_API_URL is not configured.");
+      return;
+    }
+    if (!mintConfigured) {
+      setError("INFT_CONTRACT_ADDRESS is not configured on the API.");
       return;
     }
     setIsCrystallizing(true);
     setError(null);
     try {
-      const response = await fetch(`${CRYSTALLIZE_API_URL}/crystallize`, {
+      const response = await fetch(`${HIVEMIND_API_URL}/mint`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ simulation_run_id: simulationRunId, top_n: 1 }),
       });
       if (!response.ok) {
-        throw new Error(`POST /crystallize returned ${response.status}`);
+        throw new Error(await errorMessageFromResponse(response));
       }
-      const data = (await response.json()) as { crystallized: CrystallizedAgent[] };
-      setResults(data.crystallized);
+      const data = (await response.json()) as MintResponse;
+      setResults([
+        {
+          token_id: data.token_id ?? data.proof?.token_id ?? null,
+          tx_hash: data.tx_hash ?? data.proof?.tx_hash ?? null,
+          storage_ref:
+            data.storage_uri ??
+            data.proof?.storage_uri ??
+            data.storage_hash ??
+            data.proof?.storage_hash ??
+            "pending storage proof",
+          archetype: winningEntry?.strategy.split(" / ")[0] ?? null,
+          composite_score: winningEntry?.score ?? null,
+          owner: data.contract ?? data.proof?.contract_address ?? "",
+          chain: data.proof?.chain ?? "0g-galileo",
+          explorer: data.tx_url ?? data.proof?.tx_explorer ?? null,
+        },
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -132,9 +190,9 @@ function CrystallizePanel({
     }
   };
 
-  const winner = results && results.length > 0 ? results[0] : null;
-  const explorerUrl = winner ? explorerFor(winner) : null;
-  const archetypeKey = (winner?.archetype ?? "") as Archetype;
+  const minted = results && results.length > 0 ? results[0] : null;
+  const explorerUrl = minted ? explorerFor(minted) : null;
+  const archetypeKey = (minted?.archetype ?? "") as Archetype;
   const archetypeColor = ARCHETYPE_COLORS[archetypeKey] ?? "#888888";
 
   return (
@@ -147,45 +205,47 @@ function CrystallizePanel({
           <p className="eyebrow">Winner crystallization</p>
           <h2 id="crystallize-heading">Mint winning agent as iNFT</h2>
         </div>
-        {!winner ? (
+        {!minted ? (
           <span className={`connection-pill ${apiAvailable ? "live" : "mock"}`}>
-            {apiAvailable ? "Ready to mint" : "API offline"}
+            {apiAvailable ? (mintConfigured ? "Mint endpoint" : "Contract not configured") : "API offline"}
           </span>
         ) : (
           <span className="connection-pill live">Minted</span>
         )}
       </div>
 
-      {!winner ? (
+      {!minted ? (
         <div className="crystallize-cta">
           <button
             type="button"
             className="primary-button primary-large hero-button"
             onClick={() => void handleCrystallize()}
-            disabled={isCrystallizing || !apiAvailable}
+            disabled={isCrystallizing || !apiAvailable || !mintConfigured}
           >
-            {isCrystallizing ? "Crystallizing…" : "Crystallize Winner"}
+            {isCrystallizing ? "Minting..." : "Mint Winner"}
           </button>
           {error ? <p className="connection-error">{error}</p> : null}
         </div>
       ) : (
         <div className="crystallize-success">
-          <div className="minted-badge">✓ MINTED</div>
+          <div className="minted-badge">MINTED</div>
           <div className="minted-stats">
             <div className="minted-stat">
               <span>Token ID</span>
-              <strong className="minted-token">#{winner.token_id}</strong>
+              <strong className="minted-token">
+                {minted.token_id === null ? "pending" : `#${minted.token_id}`}
+              </strong>
             </div>
             <div className="minted-stat">
               <span>Archetype</span>
               <strong className="minted-archetype">
                 <span className="archetype-dot" style={{ background: archetypeColor }} />
-                {winner.archetype ?? "unknown"}
+                {minted.archetype ?? "unknown"}
               </strong>
             </div>
             <div className="minted-stat">
               <span>Composite</span>
-              <strong className="minted-composite">{formatComposite(winner.composite_score)}</strong>
+              <strong className="minted-composite">{formatComposite(minted.composite_score)}</strong>
             </div>
           </div>
           {explorerUrl ? (
@@ -195,24 +255,26 @@ function CrystallizePanel({
               target="_blank"
               rel="noreferrer"
             >
-              View on 0G Chainscan ↗
+              View on 0G Chainscan
             </a>
           ) : null}
-          <div className="tx-hash-row">
-            <span>Tx</span>
-            <code>{winner.tx_hash}</code>
-            <button
-              type="button"
-              className="copy-button"
-              onClick={() => void handleCopy(winner.tx_hash)}
-              aria-label="Copy transaction hash"
-            >
-              {copied ? "✓ Copied" : "Copy"}
-            </button>
-          </div>
+          {minted.tx_hash ? (
+            <div className="tx-hash-row">
+              <span>Tx</span>
+              <code>{minted.tx_hash}</code>
+              <button
+                type="button"
+                className="copy-button"
+                onClick={() => void handleCopy(minted.tx_hash ?? "")}
+                aria-label="Copy transaction hash"
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          ) : null}
           <div className="tx-hash-row">
             <span>Storage</span>
-            <code>{winner.storage_ref}</code>
+            <code>{minted.storage_ref}</code>
           </div>
         </div>
       )}
@@ -281,7 +343,7 @@ function ScenarioPanel({
           onClick={onRunScenario}
           disabled={isRunningScenario}
         >
-          {isRunningScenario ? "Running…" : "Run Scenario"}
+          {isRunningScenario ? "Running..." : "Run Scenario"}
         </button>
       </div>
     </section>
@@ -312,7 +374,7 @@ function ConnectionStatusLine({
             <span>{badge.label}</span>
             {index < visibleBadges.length - 1 ? (
               <span className="status-line-sep" aria-hidden>
-                ·
+                /
               </span>
             ) : null}
           </span>
@@ -478,7 +540,7 @@ function Leaderboard({ entries }: { entries: LeaderboardEntry[] }) {
               key={entry.agentId}
             >
               <span className="rank-cell">
-                {isFirst ? <span className="rank-trophy" aria-hidden>🏆</span> : null}
+                {isFirst ? <span className="rank-trophy" aria-hidden>TOP</span> : null}
                 <span>#{entry.rank}</span>
               </span>
               <strong>{entry.agentId}</strong>
@@ -502,7 +564,7 @@ function MockBanner({ onDismiss }: { onDismiss: () => void }) {
   return (
     <div className="mock-banner" role="status">
       <span className="mock-banner-text">
-        ⚡ Running on mock data — connect backend for live swarm
+        Running on mock data - connect backend for live swarm
       </span>
       <button
         type="button"
@@ -510,7 +572,7 @@ function MockBanner({ onDismiss }: { onDismiss: () => void }) {
         onClick={onDismiss}
         aria-label="Dismiss banner"
       >
-        ×
+        x
       </button>
     </div>
   );
@@ -585,8 +647,9 @@ export function App() {
         />
         <div className="right-stack">
           <CrystallizePanel
-            simulationRunId={transcript.latestScenario || "manual"}
             apiAvailable={mode === "api"}
+            mintConfigured={transcript.inftStatus === "active" || transcript.inftStatus === "minted"}
+            winningEntry={leaderboard[0]}
           />
           <MetricPanel metrics={metrics} mode={mode} />
           <TranscriptPanel transcript={transcript} />

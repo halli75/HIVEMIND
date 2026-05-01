@@ -13,7 +13,7 @@ import httpx
 
 from .axl import transcript_stats
 from .models import Action, AgentArchetype, AgentState, LeaderboardEntry, Scenario
-from .scoring import aiq_for, choose_action, confidence_for, pnl_bps_for, score_for
+from .scoring import aiq_for, pnl_bps_for, score_for
 
 
 _VALID_ACTIONS: set[str] = {
@@ -27,6 +27,61 @@ _VALID_ACTIONS: set[str] = {
     "vote",
     "front_run",
 }
+
+
+def _market_state_from_scenario(scenario: Scenario) -> dict[str, Any]:
+    price_delta = scenario.sentiment * scenario.signal_strength
+    return {
+        "scenario_id": scenario.scenario_id,
+        "volatility": scenario.volatility,
+        "liquidity_delta": scenario.liquidity_delta,
+        "sentiment": scenario.sentiment,
+        "gas_pressure": scenario.gas_pressure,
+        "signal_strength": scenario.signal_strength,
+        "price_delta": price_delta,
+        "price_delta_pct": price_delta,
+        "pool_spread_bps": max(0.0, scenario.volatility * 30.0 - 4.0),
+        "peg_delta": scenario.liquidity_delta * 0.005,
+    }
+
+
+def _memory_from_scenario(scenario: Scenario, agent_id: str, jitter: float) -> dict[str, Any]:
+    return {
+        "axl_signals": [
+            {
+                "id": f"sig-{agent_id}-mkt",
+                "type": "MARKET_SIGNAL",
+                "direction": "buy" if scenario.sentiment >= 0 else "sell",
+                "confidence": min(0.99, abs(scenario.sentiment) * scenario.signal_strength + jitter * 0.1),
+            },
+            {
+                "id": f"sig-{agent_id}-trade",
+                "type": "TRADE_INTENT",
+                "size_usd": 200_000 + scenario.volatility * 600_000,
+            },
+        ],
+        "lp_position": {
+            "in_range": scenario.liquidity_delta >= -0.4,
+            "impermanent_loss_delta": max(0.0, scenario.volatility * 0.04 - 0.005),
+            "range_lower": 1800 - scenario.volatility * 300,
+            "range_upper": 2200 + scenario.volatility * 300,
+        },
+        "social_graph": [
+            {"agent_id": "leader-001", "stake": 1_000_000, "vote": "for"},
+            {"agent_id": "leader-002", "stake": 750_000, "vote": "abstain"},
+        ],
+        "min_spread_bps": 8,
+        "portfolio": 100_000.0,
+    }
+
+
+def _brief_error(error: Exception) -> str:
+    message = str(error).strip().replace("\n", " ")
+    message = re.sub(r"hf_[A-Za-z0-9_=-]+", "hf_[REDACTED]", message)
+    message = re.sub(r"app-sk-[A-Za-z0-9_=-]+", "app-sk-[REDACTED]", message)
+    message = re.sub(r"(?i)((?:UNISWAP_API_KEY|ZERO_G_COMPUTE_BEARER_TOKEN)\s*=\s*)\S+", r"\1[REDACTED]", message)
+    message = re.sub(r"(?i)((?:DEPLOYER|WALLET)_PRIVATE_KEY\s*=\s*)(0x)?[a-f0-9]{64}", r"\1[REDACTED]", message)
+    return message[:240] if message else error.__class__.__name__
 
 
 def _env_truthy(name: str) -> bool:
@@ -159,21 +214,26 @@ class LocalInferenceProvider:
         scenario: Scenario,
         jitter: float,
     ) -> AgentState:
-        action = choose_action(archetype, scenario, jitter)
-        confidence = confidence_for(archetype, scenario, jitter)
+        market_state = _market_state_from_scenario(scenario)
+        memory = _memory_from_scenario(scenario, agent_id, jitter)
+        decision = archetype.heuristic(market_state, memory)
+
+        action = decision.get("action", "hold")
+        if action not in _VALID_ACTIONS:
+            action = "hold"
+        confidence = max(0.0, min(1.0, float(decision.get("confidence", 0.5))))
+        rationale = str(decision.get("rationale", f"{archetype.name}: heuristic"))
+
         aiq = aiq_for(archetype, scenario, confidence, jitter)
         pnl_bps = pnl_bps_for(action, archetype, scenario, jitter)
         score = score_for(confidence, pnl_bps, aiq, archetype.tier)
-        rationale = (
-            f"{archetype.name} selected {action} with sentiment={scenario.sentiment:.2f}, "
-            f"volatility={scenario.volatility:.2f}, liquidity_delta={scenario.liquidity_delta:.2f}"
-        )
+
         return AgentState(
             agent_id=agent_id,
             archetype=archetype.name,
             tier=archetype.tier,
             action=cast(Action, action),
-            confidence=confidence,
+            confidence=round(confidence, 4),
             pnl_bps=pnl_bps,
             aiq=aiq,
             score=score,
@@ -197,46 +257,8 @@ class MockInferenceProvider:
         scenario: Scenario,
         jitter: float,
     ) -> AgentState:
-        price_delta = scenario.sentiment * scenario.signal_strength
-        market_state: dict[str, Any] = {
-            "scenario_id": scenario.scenario_id,
-            "volatility": scenario.volatility,
-            "liquidity_delta": scenario.liquidity_delta,
-            "sentiment": scenario.sentiment,
-            "gas_pressure": scenario.gas_pressure,
-            "signal_strength": scenario.signal_strength,
-            "price_delta": price_delta,
-            "price_delta_pct": price_delta,
-            "pool_spread_bps": max(0.0, scenario.volatility * 30.0 - 4.0),
-            "peg_delta": scenario.liquidity_delta * 0.005,
-        }
-        memory: dict[str, Any] = {
-            "axl_signals": [
-                {
-                    "id": f"sig-{agent_id}-mkt",
-                    "type": "MARKET_SIGNAL",
-                    "direction": "buy" if scenario.sentiment >= 0 else "sell",
-                    "confidence": min(0.99, abs(scenario.sentiment) * scenario.signal_strength + jitter * 0.1),
-                },
-                {
-                    "id": f"sig-{agent_id}-trade",
-                    "type": "TRADE_INTENT",
-                    "size_usd": 200_000 + scenario.volatility * 600_000,
-                },
-            ],
-            "lp_position": {
-                "in_range": scenario.liquidity_delta >= -0.4,
-                "impermanent_loss_delta": max(0.0, scenario.volatility * 0.04 - 0.005),
-                "range_lower": 1800 - scenario.volatility * 300,
-                "range_upper": 2200 + scenario.volatility * 300,
-            },
-            "social_graph": [
-                {"agent_id": "leader-001", "stake": 1_000_000, "vote": "for"},
-                {"agent_id": "leader-002", "stake": 750_000, "vote": "abstain"},
-            ],
-            "min_spread_bps": 8,
-            "portfolio": 100_000.0,
-        }
+        market_state = _market_state_from_scenario(scenario)
+        memory = _memory_from_scenario(scenario, agent_id, jitter)
 
         decision = archetype.mock_decide(market_state, memory)
         action = decision.get("action", "hold")
@@ -388,6 +410,21 @@ class LiveAxlMessageBus:
             nodes_online = len(pool.connected_node_ids)
             failed_nodes = pool.failed_node_urls
 
+            if nodes_online == 0:
+                await pool.disconnect()
+                return {
+                    "mode": "unavailable",
+                    "messages": 0,
+                    "nodes_online": 0,
+                    "failed_nodes": failed_nodes,
+                    "last_message_type": "none",
+                    "p50_latency_ms": None,
+                    "p95_latency_ms": None,
+                    "topic": f"hivemind.scenario.{scenario.scenario_id}",
+                    "coordinator": "axl_pool",
+                    "error": "No AXL pool nodes connected",
+                }
+
             await pool.broadcast(
                 "SCENARIO_SHOCK",
                 {"scenario_id": scenario.scenario_id, "label": scenario.label},
@@ -492,16 +529,16 @@ class UniswapExecutionProvider:
                 chain_id=self._chain_id,
                 recipient=self._swapper_address,
             )
-        except Exception:
-            # Quote unavailable (API down, no liquidity, etc.) — return placeholder
+        except Exception as exc:
+            # Quote unavailable (API down, no liquidity, etc.) - return explicit non-live telemetry.
             fallback_id = f"uni-quote-{state_digest[:8]}"
             return {
-                "mode": "live",
+                "mode": "unavailable",
                 "chain": "sepolia",
                 "route": ["WETH", "USDC"],
                 "recommended_action": winner.action,
                 "quote_id": fallback_id,
-                "quote": {"quoteId": fallback_id},
+                "quote": {"quoteId": fallback_id, "error": _brief_error(exc)},
                 "swap_receipt": {
                     "status": "unavailable",
                     "transaction_hash": None,

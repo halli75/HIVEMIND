@@ -267,6 +267,7 @@ def test_mint_reports_storage_unavailable_without_generic_500(monkeypatch) -> No
         async def communicate(self):
             return (
                 b"[3/4] Uploading to 0G Storage ...\n"
+                b"DEPLOYER_PRIVATE_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
                 b"storage_unavailable: 0G Storage upload failed after 4 attempts: 503 Service Unavailable",
                 b"",
             )
@@ -284,6 +285,8 @@ def test_mint_reports_storage_unavailable_without_generic_500(monkeypatch) -> No
     detail = response.json()["detail"]
     assert detail["status"] == "storage_unavailable"
     assert "minting did not start" in detail["message"]
+    assert "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" not in detail["output_tail"]
+    assert "[REDACTED]" in detail["output_tail"]
 
 
 def test_mint_reports_storage_upload_failed_for_flow_revert(monkeypatch) -> None:
@@ -346,6 +349,8 @@ def test_mint_success_updates_state_inft_proof(monkeypatch) -> None:
     assert body["status"] == "minted"
     assert body["token_id"] == 7
     assert body["storage_uri"] == "0g://storage/hivemind/0xroot"
+    assert "output" not in body
+    assert "output_tail" in body
     proof = client.get("/state").json()["proof"]["inft"]
     assert proof["status"] == "minted"
     assert proof["token_id"] == 7

@@ -2,7 +2,9 @@
 
 ## Summary
 
-HIVEMIND can run live 0G Compute and reach the 0G Storage turbo indexer, but the live iNFT mint remains blocked before the Galileo mint transaction because encrypted strategy upload cannot complete.
+Historical blocker record from 2026-04-29. HIVEMIND could run live 0G Compute and reach the 0G Storage turbo indexer, but the live iNFT mint was blocked before the Galileo mint transaction because encrypted strategy upload could not complete.
+
+Resolved on 2026-05-01 by the direct storage-node fallback. Current proof: `docs/evidence/0g-inft-mint-2026-05-01.md`.
 
 ## Environment
 
@@ -41,6 +43,10 @@ Static calls to `flow.submit(submission)` using exact fee and 10 percent padded 
 - Exact result: `execution reverted (no data present; likely require(false) occurred`
 - Padded result: `execution reverted (no data present; likely require(false) occurred`
 - Evidence: ignored local file `runs/proof-turbo-20260429-165426/05-flow-staticcall-probe.json`.
+
+## Follow-Up Implementation
+
+The mint script now has a direct storage-node fallback that targets the wrapped Flow `submit(((Submission),address))` ABI before segment upload. The 2026-05-01 proof confirms this path through storage upload and Galileo mint.
 
 ## What Is Not Included
 

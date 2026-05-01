@@ -2,12 +2,15 @@
 
 Hardhat-style scaffold for the HIVEMIND iNFT milestone.
 
-The current `HivemindINFT` contract is intentionally minimal and mock/testnet-safe:
+The current `HivemindINFT` contract is intentionally minimal and testnet-safe:
 
 - records the selected swarm winner as an owner-addressed token;
 - stores a 0G Storage URI, content hash, model name, strategy digest, AIQ score, and mint timestamp;
-- exposes ERC-721-like `ownerOf`, `balanceOf`, and `tokenURI` read methods for demos;
+- exposes ERC-165, ERC-721, and ERC-721 metadata compatibility for wallet, marketplace, and indexer surfaces;
+- keeps ERC-7857-style private metadata functions: sealed-key transfer, clone, and usage authorization;
 - avoids live secrets and production mainnet assumptions.
+
+TEE/ZKP verifier validation for ERC-7857-style proofs is explicitly deferred; proof bytes are accepted by the hackathon contract surface but not cryptographically verified.
 
 ## Local Commands
 

@@ -264,3 +264,60 @@
 - Turbo failure: `Failed to submit transaction: ProviderError: execution reverted` on Flow address `0x22e03a6a89b950f1c82ec5e74f8eca321a105296`.
 - Static call probe against `flow.submit` reverted with exact and 10 percent padded fee, so the failure is not obviously a missing balance or underpaid storage-fee issue.
 - Added `docs/integrations/0g-escalation.md` with sanitized evidence for 0G support.
+
+## Working Version Familiarization
+
+- [x] Inspect current branch/status and preserve uncommitted SDK changes.
+- [x] Review modified SDK files for behavior, performance, and API/UI contract impact.
+- [x] Inspect recent commits and the web/API surfaces most likely affected by these changes.
+- [x] Run focused verification where safe.
+- [x] Summarize the current working state plus polish, performance, and UI opportunities.
+
+## Working Version Familiarization Review
+
+- Current branch is `dev`, aligned with `origin/dev`, with uncommitted SDK tuning in `engine.py`, `providers.py`, and `scoring.py`.
+- The SDK changes move shared scenario market/memory builders into `providers.py`, make `LocalInferenceProvider` use archetype heuristics directly, and retune PnL/score weights for more differentiated strategy outcomes.
+- Focused verification passed: Python SDK/API tests reported `34 passed`; web typecheck/build passed.
+- A local 42-agent scenario probe produced differentiated actions across buy, hold, rebalance, arb, vote, and front_run, with a tighter leaderboard score range of about 11-43.
+- Main polish targets identified: align the dashboard iNFT action with live `POST /mint`, improve graph rendering/perceived performance, and recalibrate UI score/risk displays for the new score distribution.
+
+## PR Review: Complete Sprint Polish
+
+- [x] Confirm the exact PR review range after fetching `origin/dev`.
+- [x] Preserve existing uncommitted SDK tuning while reviewing the remote UI polish commit.
+- [x] Review API, SDK, contracts, execution scripts, docs, and web UI diff line by line.
+- [x] Apply small contained fixes directly when they are low-risk.
+- [x] Record any large merge-blocking issues separately for follow-up.
+- [x] Run focused verification after fixes.
+
+## PR Review: Complete Sprint Polish Review
+
+- Fast-forwarded local `dev` to `origin/dev` before review; preserved the existing uncommitted SDK tuning changes in `engine.py`, `providers.py`, and `scoring.py`.
+- Fixed dashboard minting to use the live `/mint` endpoint, parse structured API errors, and avoid claiming readiness when `INFT_CONTRACT_ADDRESS` is not configured.
+- Hardened `/mint` API responses by killing timed-out subprocesses and redacting subprocess output tails before returning them to clients.
+- Fixed live integration truthfulness: Uniswap quote failures now report `mode=unavailable`, AXL pools with zero connected nodes no longer report `live_axl`, and the web badge renders unavailable integrations as offline.
+- Fixed the direct 0G Storage fallback fee calculation and forced segment upload to reuse the already-indexed Flow log entry instead of retrying the old SDK submit ABI.
+- Verification passed: Python/API/execution tests (`37 passed`), web build, contracts compile/test/deploy-local, AXL smoke, web audit, contracts audit, `git diff --check`, outgoing diff secret scan with only intentional placeholder/test-pattern matches, and `git merge-tree --write-tree origin/main HEAD` without conflicts.
+
+## PR Merge-Ready: iNFT Proof And NFT Compatibility
+
+- [x] Inspect current contract, tests, mint path, docs, and working tree without reverting existing review fixes.
+- [x] Upgrade `HivemindINFT` from ERC-721-like to minimal ERC-165/ERC-721/ERC-721Metadata-compatible behavior while preserving ERC-7857-style sealed-key functions.
+- [x] Add contract coverage for interfaces, approvals, transfers, safe transfers, approval clearing, and negative transfer cases.
+- [x] Run a fresh `/health`, `/scenario`, `/state`, `/mint`, `/state` proof rehearsal and save non-secret raw evidence under ignored `runs/`.
+- [x] Add tracked 0G/iNFT evidence only if the live mint succeeds; otherwise keep docs explicitly blocked.
+- [x] Update README and 0G docs to use truthful "ERC-721-compatible with ERC-7857-style private metadata functions" wording and documented verifier limitations.
+- [x] Run Python/API/execution tests, web build, contracts compile/test/deploy-local/audit, AXL smoke, secret scan, `git diff --check`, and merge-tree verification.
+
+## PR Merge-Ready: iNFT Proof And NFT Compatibility Review
+
+- Upgraded `contracts/contracts/HivemindINFT.sol` to expose ERC-165, ERC-721, and ERC-721 metadata compatibility while preserving `mintAgent`, `intelligenceRef`, `updateIntelligenceRef`, `authorizeUsage`, `isAuthorized`, `clone`, and sealed-key transfer behavior.
+- Added approval/operator state, `Approval` and `ApprovalForAll` events, `transferFrom`, both `safeTransferFrom` overloads, approval clearing on transfer, and ERC-721 receiver safety checks.
+- Updated sealed-key `transfer(from,to,tokenId,sealedKey,proof)` so token owners, approved token spenders, and operators can transfer while still emitting `PublishedSealedKey`; verifier proof validation remains explicitly deferred.
+- Added `contracts/contracts/ERC721ReceiverMock.sol` and expanded contract tests to 11 passing cases covering interfaces, metadata, approvals, operator transfer, safe transfers, unauthorized/wrong-from/zero-recipient/nonexistent/unsafe receiver failures, clone, and usage authorization.
+- Aligned the SDK crystallization Web3 wrapper with the current six-argument `mintAgent` and `AgentCrystallized` event shape.
+- Fresh proof rehearsal saved raw non-secret evidence under ignored `runs/proof-20260501-184559/`: `/health`, `/scenario`, `/state`, `/mint`, and `/state` after mint.
+- Live proof succeeded: scenario `merge-proof-20260501-184559`, winner `agent-018`, Galileo token `5`, contract `0x55924a84BD2A5f5e4C63885a2d8f4c129E897A36`, chain `16602`, mint tx `0x8710be02581198e1b5e8e1787cf99b40cd55c829483fd2adc3961ad76c5c1862`, storage root `0xc753be4f5c0d891138e488a0d17099d5e15162cc4ebd0b5b010e44e3b22b9765`.
+- Added tracked non-secret proof summary at `docs/evidence/0g-inft-mint-2026-05-01.md`.
+- Updated README, 0G docs, 0G escalation history, and contracts README from blocked/ERC-721-like wording to the verified ERC-721-compatible iNFT proof state.
+- Verification passed: `npm run compile && npm test` in `contracts` (`11` contract tests); Python/API/AXL/execution pytest (`39 passed`); web build/typecheck; contracts deploy-local; contracts audit high; web audit moderate; AXL smoke (`40` messages, 2 nodes); `git diff --check`; secret scan with only exact redaction-test fixtures allowlisted; `git fetch origin main && git merge-tree --write-tree origin/main HEAD` returned tree `1dc4455bcb2e59e2c543ea61c5f4c744d3b02d0b`.

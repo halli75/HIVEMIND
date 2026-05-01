@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +88,7 @@ def _build_execution_provider() -> ExecutionProvider | None:
         import warnings
         warnings.warn(
             "HIVEMIND_USE_MOCK_UNISWAP=false but UNISWAP_API_KEY or WALLET_PRIVATE_KEY "
-            "is missing — falling back to mock execution provider",
+            "is missing - falling back to mock execution provider",
             stacklevel=2,
         )
         return None
@@ -188,6 +189,27 @@ def _looks_like_storage_upload_failed(output: str) -> bool:
             "providererror: execution reverted",
         )
     )
+
+
+def _redact_process_output(output: str) -> str:
+    """Keep subprocess diagnostics useful without echoing secrets to API callers."""
+    redacted = output
+    patterns = (
+        (r"hf_[A-Za-z0-9_=-]+", "hf_[REDACTED]"),
+        (r"app-sk-[A-Za-z0-9_=-]+", "app-sk-[REDACTED]"),
+        (
+            r"(?i)((?:DEPLOYER|WALLET)_PRIVATE_KEY\s*=\s*)(0x)?[a-f0-9]{64}",
+            r"\1[REDACTED]",
+        ),
+        (
+            r"(?i)((?:ZERO_G_COMPUTE_BEARER_TOKEN|UNISWAP_API_KEY)\s*=\s*)\S+",
+            r"\1[REDACTED]",
+        ),
+        (r"(?i)(private key(?:\s+\w+){0,3}\s*[:=]\s*)(0x)?[a-f0-9]{64}", r"\1[REDACTED]"),
+    )
+    for pattern, replacement in patterns:
+        redacted = re.sub(pattern, replacement, redacted)
+    return redacted
 
 
 def _use_mock_0g() -> bool:
@@ -379,7 +401,7 @@ def create_app(
 
     @app.post("/mint")
     async def mint_inft() -> dict[str, Any]:
-        """Trigger a real iNFT mint: encrypt → 0G Storage → mintAgent on 0G Galileo.
+        """Trigger a real iNFT mint: encrypt -> 0G Storage -> mintAgent on 0G Galileo.
 
         Delegates to contracts/scripts/mint-inft.ts via npm run mint.
         Requires INFT_CONTRACT_ADDRESS, DEPLOYER_PRIVATE_KEY, ZERO_G_RPC_URL in env.
@@ -400,6 +422,7 @@ def create_app(
         env.setdefault("HIVEMIND_API_URL", "http://localhost:8000")
         timeout_seconds = _env_int("MINT_SCRIPT_TIMEOUT_SECONDS", default=240)
 
+        proc = None
         try:
             proc = await _asyncio.create_subprocess_exec(
                 npm_cmd, "run", "mint",
@@ -410,6 +433,12 @@ def create_app(
             )
             stdout, _ = await _asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
         except _asyncio.TimeoutError:
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
             raise HTTPException(
                 status_code=504,
                 detail={
@@ -419,18 +448,9 @@ def create_app(
             )
 
         output = stdout.decode("utf-8", errors="replace")
+        output_tail = _redact_process_output(output[-3000:])
 
         if proc.returncode != 0:
-            if _looks_like_storage_unavailable(output):
-                raise HTTPException(
-                    status_code=503,
-                    detail={
-                        "status": "storage_unavailable",
-                        "message": "0G Storage upload is unavailable; encryption succeeded but minting did not start.",
-                        "retry": "Retry POST /mint after the 0G Storage testnet recovers.",
-                        "output_tail": output[-3000:],
-                    },
-                )
             if _looks_like_storage_upload_failed(output):
                 raise HTTPException(
                     status_code=502,
@@ -438,7 +458,17 @@ def create_app(
                         "status": "storage_upload_failed",
                         "message": "0G Storage upload reached the storage network, but the storage fee transaction failed before minting.",
                         "retry": "Verify the selected 0G Storage indexer/Flow contract and retry before minting.",
-                        "output_tail": output[-3000:],
+                        "output_tail": output_tail,
+                    },
+                )
+            if _looks_like_storage_unavailable(output):
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "status": "storage_unavailable",
+                        "message": "0G Storage upload is unavailable; encryption succeeded but minting did not start.",
+                        "retry": "Retry POST /mint after the 0G Storage testnet recovers.",
+                        "output_tail": output_tail,
                     },
                 )
             raise HTTPException(
@@ -446,7 +476,7 @@ def create_app(
                 detail={
                     "status": "mint_failed",
                     "message": f"Mint script exited {proc.returncode}",
-                    "output_tail": output[-3000:],
+                    "output_tail": output_tail,
                 },
             )
 
@@ -485,7 +515,7 @@ def create_app(
             "content_hash": content_hash,
             "contract": inft_address,
             "proof": snapshot.proof["inft"],
-            "output": output[-3000:],
+            "output_tail": output_tail,
         }
 
     @app.websocket("/ws/state")

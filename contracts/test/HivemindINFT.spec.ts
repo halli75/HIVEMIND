@@ -7,17 +7,31 @@ import { network } from "hardhat";
 const { ethers } = await network.create();
 
 async function deploy() {
-  const [deployer, winner, other] = await ethers.getSigners();
+  const [deployer, winner, other, operator] = await ethers.getSigners();
   const inft = await ethers.deployContract("HivemindINFT", [deployer.address]);
-  return { inft, deployer, winner, other };
+  return { inft, deployer, winner, other, operator };
 }
 
 const STORAGE_HASH =
   "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const ERC165_INTERFACE_ID = "0x01ffc9a7";
+const ERC721_INTERFACE_ID = "0x80ac58cd";
+const ERC721_METADATA_INTERFACE_ID = "0x5b5e139f";
+
+async function mintTestAgent(inft: any, to: string) {
+  await (await inft.mintAgent(
+    to,
+    "0g://storage/hivemind/test-agent.json",
+    STORAGE_HASH,
+    "test-model",
+    "sha256:test-digest",
+    5000
+  )).wait();
+}
 
 describe("HivemindINFT", function () {
   it("mints a winning agent with a storage and intelligence reference", async function () {
-    const { inft, deployer, winner } = await deploy();
+    const { inft, winner } = await deploy();
     const deploymentBlock = await ethers.provider.getBlockNumber();
 
     const tx = await inft.mintAgent(
@@ -58,19 +72,101 @@ describe("HivemindINFT", function () {
     assert.equal(ref.aiq, 9120n);
   });
 
+  it("supports ERC-165, ERC-721, and ERC-721 metadata interfaces", async function () {
+    const { inft } = await deploy();
+
+    assert.equal(await inft.supportsInterface(ERC165_INTERFACE_ID), true);
+    assert.equal(await inft.supportsInterface(ERC721_INTERFACE_ID), true);
+    assert.equal(await inft.supportsInterface(ERC721_METADATA_INTERFACE_ID), true);
+    assert.equal(await inft.supportsInterface("0xffffffff"), false);
+    assert.equal(await inft.name(), "HIVEMIND iNFT");
+    assert.equal(await inft.symbol(), "HIVEAI");
+  });
+
+  it("returns token metadata URIs and rejects nonexistent token metadata", async function () {
+    const { inft, winner } = await deploy();
+    await mintTestAgent(inft, winner.address);
+
+    assert.equal(await inft.tokenURI(1), "hivemind://inft/1");
+    await assert.rejects(
+      () => inft.tokenURI(99),
+      /TokenDoesNotExist/
+    );
+  });
+
+  it("approves a token spender and clears approval after transferFrom", async function () {
+    const { inft, winner, other, operator } = await deploy();
+    await mintTestAgent(inft, winner.address);
+
+    const inftAsWinner = inft.connect(winner) as unknown as typeof inft;
+    await (await (inftAsWinner as any).approve(operator.address, 1)).wait();
+    assert.equal(await inft.getApproved(1), operator.address);
+
+    const inftAsOperator = inft.connect(operator) as unknown as typeof inft;
+    await (await (inftAsOperator as any).transferFrom(winner.address, other.address, 1)).wait();
+
+    assert.equal(await inft.ownerOf(1), other.address);
+    assert.equal(await inft.balanceOf(winner.address), 0n);
+    assert.equal(await inft.balanceOf(other.address), 1n);
+    assert.equal(await inft.getApproved(1), ethers.ZeroAddress);
+  });
+
+  it("lets an approved operator transfer with ERC-721 and ERC-7857-style APIs", async function () {
+    const { inft, winner, other, operator } = await deploy();
+    await mintTestAgent(inft, winner.address);
+
+    const inftAsWinner = inft.connect(winner) as unknown as typeof inft;
+    await (await (inftAsWinner as any).setApprovalForAll(operator.address, true)).wait();
+    assert.equal(await inft.isApprovedForAll(winner.address, operator.address), true);
+
+    const inftAsOperator = inft.connect(operator) as unknown as typeof inft;
+    const sealedKey = ethers.hexlify(ethers.randomBytes(32));
+    const proof = ethers.hexlify(ethers.randomBytes(16));
+    await (await (inftAsOperator as any).transfer(
+      winner.address,
+      other.address,
+      1,
+      sealedKey,
+      proof
+    )).wait();
+
+    assert.equal(await inft.ownerOf(1), other.address);
+    assert.equal(await inft.balanceOf(winner.address), 0n);
+    assert.equal(await inft.balanceOf(other.address), 1n);
+  });
+
+  it("supports both safeTransferFrom overloads", async function () {
+    const { inft, winner, other } = await deploy();
+    await mintTestAgent(inft, winner.address);
+
+    const inftAsWinner = inft.connect(winner) as unknown as typeof inft;
+    await (await (inftAsWinner as any)["safeTransferFrom(address,address,uint256)"](
+      winner.address,
+      other.address,
+      1
+    )).wait();
+
+    assert.equal(await inft.ownerOf(1), other.address);
+
+    const receiver = await ethers.deployContract("ERC721ReceiverMock");
+    const receiverAddress = await receiver.getAddress();
+    const inftAsOther = inft.connect(other) as unknown as typeof inft;
+    const data = ethers.hexlify(ethers.toUtf8Bytes("sealed-transfer"));
+    await (await (inftAsOther as any)["safeTransferFrom(address,address,uint256,bytes)"](
+      other.address,
+      receiverAddress,
+      1,
+      data
+    )).wait();
+
+    assert.equal(await inft.ownerOf(1), receiverAddress);
+  });
+
   it("ERC-7857: transfer moves ownership and emits PublishedSealedKey", async function () {
-    const { inft, deployer, winner, other } = await deploy();
+    const { inft, winner, other } = await deploy();
     const deploymentBlock = await ethers.provider.getBlockNumber();
 
-    // Mint token 1 to winner
-    await (await inft.mintAgent(
-      winner.address,
-      "0g://storage/hivemind/test-agent.json",
-      STORAGE_HASH,
-      "test-model",
-      "sha256:test-digest",
-      5000
-    )).wait();
+    await mintTestAgent(inft, winner.address);
 
     assert.equal(await inft.ownerOf(1), winner.address);
 
@@ -98,14 +194,7 @@ describe("HivemindINFT", function () {
   it("ERC-7857: transfer rejects non-owner callers", async function () {
     const { inft, winner, other } = await deploy();
 
-    await (await inft.mintAgent(
-      winner.address,
-      "0g://storage/hivemind/test-agent.json",
-      STORAGE_HASH,
-      "test-model",
-      "sha256:test-digest",
-      5000
-    )).wait();
+    await mintTestAgent(inft, winner.address);
 
     const sealedKey = ethers.hexlify(ethers.randomBytes(32));
     const proof = ethers.hexlify(ethers.randomBytes(16));
@@ -113,23 +202,54 @@ describe("HivemindINFT", function () {
 
     await assert.rejects(
       () => (inftAsOther as any).transfer(winner.address, other.address, 1, sealedKey, proof),
+      /NotApprovedOrOwner/
+    );
+    assert.equal(await inft.ownerOf(1), winner.address);
+  });
+
+  it("rejects unauthorized, zero-address, nonexistent, and unsafe receiver transfers", async function () {
+    const { inft, winner, other } = await deploy();
+    await mintTestAgent(inft, winner.address);
+
+    const inftAsOther = inft.connect(other) as unknown as typeof inft;
+    await assert.rejects(
+      () => (inftAsOther as any).transferFrom(winner.address, other.address, 1),
+      /NotApprovedOrOwner/
+    );
+
+    const inftAsWinner = inft.connect(winner) as unknown as typeof inft;
+    await assert.rejects(
+      () => (inftAsWinner as any).transferFrom(winner.address, ethers.ZeroAddress, 1),
+      /InvalidRecipient/
+    );
+
+    await assert.rejects(
+      () => (inftAsWinner as any).transferFrom(winner.address, other.address, 99),
+      /TokenDoesNotExist/
+    );
+
+    await assert.rejects(
+      () => (inftAsWinner as any).transferFrom(other.address, winner.address, 1),
       /NotTokenOwner/
+    );
+
+    const unsafeAddress = await inft.getAddress();
+    await assert.rejects(
+      () => (inftAsWinner as any)["safeTransferFrom(address,address,uint256)"](
+        winner.address,
+        unsafeAddress,
+        1
+      ),
+      /UnsafeRecipient/
     );
     assert.equal(await inft.ownerOf(1), winner.address);
   });
 
   it("ERC-7857: clone creates new token with same metadata and emits MetadataUpdated", async function () {
-    const { inft, deployer, winner, other } = await deploy();
+    const { inft, winner, other } = await deploy();
     const deploymentBlock = await ethers.provider.getBlockNumber();
 
-    await (await inft.mintAgent(
-      winner.address,
-      "0g://storage/hivemind/test-agent.json",
-      STORAGE_HASH,
-      "test-model",
-      "sha256:test-digest",
-      5000
-    )).wait();
+    await mintTestAgent(inft, winner.address);
 
     const sealedKey = ethers.hexlify(ethers.randomBytes(32));
     const proof = ethers.hexlify(ethers.randomBytes(16));
@@ -157,16 +277,9 @@ describe("HivemindINFT", function () {
   });
 
   it("ERC-7857: authorizeUsage sets authorization and emits UsageAuthorized", async function () {
-    const { inft, deployer, winner, other } = await deploy();
+    const { inft, winner, other } = await deploy();
 
-    await (await inft.mintAgent(
-      winner.address,
-      "0g://storage/hivemind/test-agent.json",
-      STORAGE_HASH,
-      "test-model",
-      "sha256:test-digest",
-      5000
-    )).wait();
+    await mintTestAgent(inft, winner.address);
 
     assert.equal(await inft.isAuthorized(1, other.address), false);
 

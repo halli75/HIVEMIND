@@ -2,7 +2,7 @@
 
 Glue layer that takes a leaderboard-winning agent, encrypts the strategy
 payload, ships the ciphertext to 0G Storage (or a local fallback), and mints
-an ERC-7857-style HivemindINFT pointing at the intelligence reference.
+an ERC-721-compatible HivemindINFT with ERC-7857-style private metadata hooks.
 
 The pipeline is duck-typed across providers so the SDK keeps no mandatory
 runtime dependency on web3 or cryptography. The two heavy deps are imported
@@ -38,9 +38,11 @@ class Web3Provider(Protocol):
         self,
         *,
         to: str,
-        intelligence_ref: str,
-        metadata_uri: str,
-        royalty_bps: int,
+        storage_uri: str,
+        storage_hash: str,
+        model: str,
+        strategy_digest: str,
+        aiq: int,
     ) -> dict[str, Any]:
         """Submit mintAgent and return ``{tx_hash, token_id}`` once mined."""
 
@@ -80,14 +82,19 @@ class MockWeb3Provider:
         self,
         *,
         to: str,
-        intelligence_ref: str,
-        metadata_uri: str,
-        royalty_bps: int,
+        storage_uri: str,
+        storage_hash: str,
+        model: str,
+        strategy_digest: str,
+        aiq: int,
     ) -> dict[str, Any]:
         token_id = self._next_token_id
         self._next_token_id += 1
         nonce = secrets.token_hex(4)
-        payload = f"{to}|{intelligence_ref}|{metadata_uri}|{royalty_bps}|{token_id}|{nonce}"
+        payload = (
+            f"{to}|{storage_uri}|{storage_hash}|{model}|{strategy_digest}|"
+            f"{aiq}|{token_id}|{nonce}"
+        )
         tx_hash = "0x" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
         return {"tx_hash": tx_hash, "token_id": token_id}
 
@@ -95,7 +102,7 @@ class MockWeb3Provider:
 class Web3MintProvider:
     """Real mint path backed by web3.py. Imports lazily.
 
-    Resolves the AgentMinted event from the receipt logs to extract the
+    Resolves the AgentCrystallized event from the receipt logs to extract the
     minted ``token_id``.
     """
 
@@ -120,32 +127,37 @@ class Web3MintProvider:
         self,
         *,
         to: str,
-        intelligence_ref: str,
-        metadata_uri: str,
-        royalty_bps: int,
+        storage_uri: str,
+        storage_hash: str,
+        model: str,
+        strategy_digest: str,
+        aiq: int,
     ) -> dict[str, Any]:
         from web3 import Web3  # type: ignore[import-not-found]
 
         nonce = self._web3.eth.get_transaction_count(self._account.address)
         tx = self._contract.functions.mintAgent(
             Web3.to_checksum_address(to),
-            intelligence_ref,
-            metadata_uri,
-            royalty_bps,
+            storage_uri,
+            storage_hash,
+            model,
+            strategy_digest,
+            aiq,
         ).build_transaction({
             "from": self._account.address,
             "nonce": nonce,
         })
         signed = self._account.sign_transaction(tx)
-        tx_hash = self._web3.eth.send_raw_transaction(signed.rawTransaction)
+        raw_transaction = getattr(signed, "rawTransaction", None) or signed.raw_transaction
+        tx_hash = self._web3.eth.send_raw_transaction(raw_transaction)
         receipt = self._web3.eth.wait_for_transaction_receipt(tx_hash)
         token_id = self._extract_token_id(receipt)
         return {"tx_hash": tx_hash.hex(), "token_id": token_id}
 
     def _extract_token_id(self, receipt: Any) -> int:
-        events = self._contract.events.AgentMinted().process_receipt(receipt)
+        events = self._contract.events.AgentCrystallized().process_receipt(receipt)
         if not events:
-            raise RuntimeError("AgentMinted event missing from receipt")
+            raise RuntimeError("AgentCrystallized event missing from receipt")
         return int(events[0]["args"]["tokenId"])
 
 
@@ -212,6 +224,7 @@ class CrystallizationPipeline:
         blob = json.dumps(strategy_payload, sort_keys=True).encode("utf-8")
 
         ciphertext = self._encrypt(blob)
+        storage_hash = "0x" + hashlib.sha256(ciphertext).hexdigest()
         storage_ref = self._storage.upload(ciphertext)
 
         metadata = {
@@ -230,19 +243,29 @@ class CrystallizationPipeline:
         if not owner_address:
             raise ValueError("winner has no owner_address and pipeline has no default owner_address")
 
+        aiq = int(round(winner.get("aiq") or winner.get("decision_weights", {}).get("aiq") or 0))
+        model = str(winner.get("model") or "local-deterministic")
+        strategy_digest = f"sha256:{storage_hash[2:18]}"
+
         mint_result = self._minter.mint_agent(
             to=_to_hex_address(owner_address),
-            intelligence_ref=storage_ref,
-            metadata_uri=metadata_uri,
-            royalty_bps=self._royalty_bps,
+            storage_uri=storage_ref,
+            storage_hash=storage_hash,
+            model=model,
+            strategy_digest=strategy_digest,
+            aiq=aiq,
         )
 
         return {
             "token_id": int(mint_result["token_id"]),
             "tx_hash": mint_result["tx_hash"],
             "storage_ref": storage_ref,
+            "storage_hash": storage_hash,
             "metadata_uri": metadata_uri,
             "intelligence_ref": storage_ref,
+            "model": model,
+            "strategy_digest": strategy_digest,
+            "aiq": aiq,
             "owner": _to_hex_address(owner_address),
             "composite_score": winner.get("composite_score"),
             "archetype": winner.get("archetype"),

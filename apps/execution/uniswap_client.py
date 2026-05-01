@@ -167,7 +167,11 @@ class UniswapClient:
         if permit_data and permit_data.get("values"):
             signature = self._sign_permit(permit_data, wallet_private_key)
 
-        swap_resp = await self.build_swap_tx(quote, signature=signature)
+        swap_resp = (
+            await self.build_swap_tx(quote, signature=signature)
+            if signature
+            else await self.build_swap_tx(quote)
+        )
         swap_tx = swap_resp.get("swap") or swap_resp.get("transaction") or swap_resp
 
         tx: dict[str, Any] = {

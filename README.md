@@ -20,21 +20,21 @@ Current MVD proof status:
 - `apps/api`: FastAPI REST and WebSocket API as the canonical scenario/state surface.
 - `apps/axl-node`: local AXL-compatible coordinator/evaluator processes over TCP JSONL with transcript evidence.
 - `apps/web`: React/Vite dashboard backed by the API/WebSocket stream with mock fallback.
-- `contracts`: Hardhat `HivemindINFT` with ERC-7857-style transfer/clone/authorizeUsage hooks and a Galileo mint script.
+- `contracts`: Hardhat `HivemindINFT` with ERC-721-compatible wallet/indexer APIs, ERC-7857-style private metadata hooks, and a Galileo mint script.
 - `data`: deterministic seed snapshots for local simulation.
 - `docs`: architecture and integration notes for 0G, Gensyn AXL, and Uniswap.
 
 ## Live Proof Rehearsal
 
-Latest run: `runs/proof-20260429-161627/` (ignored evidence folder).
+Latest run: `runs/proof-20260501-184559/` (ignored evidence folder). Tracked non-secret mint summary: `docs/evidence/0g-inft-mint-2026-05-01.md`.
 
 | Surface | Status | Evidence |
 | --- | --- | --- |
-| Gensyn AXL | Verified local/self-hosted | API `run_mode=local_axl+live_0g`; self-hosted RL Swarm bootstrap previously reached CodeZero round `28239` |
-| 0G Compute | Live with fallback | 10 top-N calls, 9 live completions, 1 HTTP 429 fallback, avg latency 7607.476 ms |
-| 0G Storage | External blocker | 4 upload attempts returned 503 from the 0G Storage indexer |
-| iNFT mint | Blocked before chain tx | `/mint` encrypted the winner, then returned `storage_unavailable`; no Galileo mint was submitted |
-| Uniswap | Live quote | Sepolia quote id `3301ca8c-df76-4c88-a6ee-efc2ebfef35d`, `0.001 WETH -> 8.75588 USDC` |
+| Gensyn AXL | Verified live/local nodes | API `run_mode=live_axl+live_0g`; 2 AXL nodes online, latest message type `TRADE_INTENT` |
+| 0G Compute | Live with fallback | 10 top-N calls, 9 live completions, 1 HTTP 429 fallback, avg latency 9512.245 ms |
+| 0G Storage | Verified in mint path | Encrypted strategy upload returned root hash `0xc753be4f5c0d891138e488a0d17099d5e15162cc4ebd0b5b010e44e3b22b9765` |
+| iNFT mint | Verified on Galileo | `/mint` returned `status=minted`, token `5`, tx `0x8710be02581198e1b5e8e1787cf99b40cd55c829483fd2adc3961ad76c5c1862` |
+| Uniswap | Live quote | Sepolia quote id `2cb04358-589b-4aab-bf61-78b32d354002`, `0.001 WETH -> 8.279133 USDC` |
 | Swap | Gated | `run_swap.py` refused to sign because `HIVEMIND_ALLOW_TESTNET_SWAP=true` was not enabled |
 
 ## AXL Benchmark Results
@@ -251,4 +251,4 @@ cd contracts
 
 ## Current Boundaries
 
-The critical path remains 0G, Gensyn AXL, and Uniswap. Live 0G Compute and Uniswap quote are proven; 0G Storage/iNFT mint is waiting on storage indexer recovery; Sepolia swap stays behind `HIVEMIND_ALLOW_TESTNET_SWAP=true` and operator review. ENS, KeeperHub, breeding, marketplace, LP management, live GraphRAG, and mainnet execution remain off the critical path.
+The critical path remains 0G, Gensyn AXL, and Uniswap. Live 0G Compute, 0G Storage upload during mint, Galileo iNFT mint, and Uniswap quote are proven; Sepolia swap stays behind `HIVEMIND_ALLOW_TESTNET_SWAP=true` and operator review. `HivemindINFT` is ERC-721-compatible for wallet/marketplace/indexer surfaces while its ERC-7857-style verifier proof validation remains hackathon-level and deferred. ENS, KeeperHub, breeding, marketplace, LP management, live GraphRAG, and mainnet execution remain off the critical path.

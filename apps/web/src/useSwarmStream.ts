@@ -318,6 +318,7 @@ function mapSnapshot(snapshot: ApiSnapshot, visualAgentCount: number) {
       ["storage_hash", "hash", "state_digest"],
       stringValue(zeroGStorage, ["storage_hash", "hash", "state_digest"]),
     ),
+    inftStatus: stringValue(proofInft, ["status"], "placeholder"),
     inftToken: stringValue(proofInft, ["token_id", "tokenId"], "pending mint"),
     inftAddress: stringValue(proofInft, ["address", "contract_address", "local_address"], "pending local address"),
     uniswapQuote: stringValue(uniswap, ["quote_id", "quoteId"]),
@@ -362,6 +363,7 @@ const mockTranscript = (scenario: string, metrics: SwarmMetrics): RunTranscript 
   axlTranscriptPath: "mock://axl/offline",
   zeroGStorageUri: "mock://0g-storage/offline/swarm-state",
   zeroGStorageHash: "mock-local",
+  inftStatus: "placeholder",
   inftToken: "pending mint",
   inftAddress: "pending local address",
   uniswapQuote: "pending quote",
@@ -390,11 +392,14 @@ const badgesFor = (mode: "api" | "mock", integrations?: ApiIntegrations): Connec
   const labelFor = (name: string, sourceMode: string) => {
     if (sourceMode === "local_axl") return `${name} live`;
     if (sourceMode.startsWith("live")) return `${name} live`;
+    if (sourceMode === "unavailable") return `${name} unavailable`;
     if (sourceMode === "seed_replay") return `${name} replay`;
     return `${name} mock`;
   };
-  const toneFor = (sourceMode: string): ConnectionBadge["tone"] =>
-    sourceMode.startsWith("live") || sourceMode === "local_axl" ? "live" : "mock";
+  const toneFor = (sourceMode: string): ConnectionBadge["tone"] => {
+    if (sourceMode === "unavailable") return "offline";
+    return sourceMode.startsWith("live") || sourceMode === "local_axl" ? "live" : "mock";
+  };
 
   return [
     { label: "API connected", tone: "live" },

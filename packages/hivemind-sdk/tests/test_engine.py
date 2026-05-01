@@ -3,7 +3,17 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from hivemind_sdk import AxlMessage, HybridInferenceProvider, Scenario, SwarmEngine, TokenBucket, ZeroGComputeInferenceProvider, append_jsonl
+from hivemind_sdk import (
+    AxlMessage,
+    HybridInferenceProvider,
+    LiveAxlMessageBus,
+    Scenario,
+    SwarmEngine,
+    TokenBucket,
+    UniswapExecutionProvider,
+    ZeroGComputeInferenceProvider,
+    append_jsonl,
+)
 
 
 def test_engine_is_deterministic_for_same_seed_and_scenario() -> None:
@@ -208,3 +218,75 @@ def test_engine_reports_live_0g_mode_and_metrics() -> None:
     assert compute["real_inference_count"] == 2
     assert compute["fallback_count"] == 0
     assert compute["model_tier"] == "qwen-test"
+
+
+def test_uniswap_quote_failure_reports_unavailable_without_overclaiming_live() -> None:
+    class FailingClient:
+        def get_quote_sync(self, *args, **kwargs):
+            raise RuntimeError("UNISWAP_API_KEY=secret-value service unavailable")
+
+    engine = SwarmEngine(
+        agent_count=3,
+        seed="uniswap-unavailable",
+        execution_provider=UniswapExecutionProvider(
+            client=FailingClient(),
+            swapper_address="0x0000000000000000000000000000000000000001",
+            token_in="0x0000000000000000000000000000000000000002",
+            token_out="0x0000000000000000000000000000000000000003",
+            amount_in_wei=1,
+        ),
+    )
+
+    snapshot = engine.inject_scenario(
+        Scenario(
+            scenario_id="uniswap-unavailable",
+            label="Uniswap outage",
+            volatility=0.5,
+            liquidity_delta=0.1,
+            sentiment=0.3,
+            gas_pressure=0.2,
+            signal_strength=0.6,
+        )
+    )
+
+    uniswap = snapshot.integrations.uniswap
+    assert uniswap["mode"] == "unavailable"
+    assert uniswap["swap_receipt"]["status"] == "unavailable"
+    assert "secret-value" not in uniswap["quote"]["error"]
+
+
+def test_live_axl_bus_reports_unavailable_when_no_nodes_connect() -> None:
+    class EmptyPool:
+        connected_node_ids: list[str] = []
+        failed_node_urls = ["ws://127.0.0.1:3999"]
+        message_count = 0
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def connect(self) -> None:
+            return None
+
+        async def broadcast(self, *args, **kwargs) -> None:
+            raise AssertionError("broadcast should not run with zero connected nodes")
+
+        async def disconnect(self) -> None:
+            return None
+
+    scenario = Scenario(
+        scenario_id="axl-offline",
+        label="AXL offline",
+        volatility=0.5,
+        liquidity_delta=0.1,
+        sentiment=0.3,
+        gas_pressure=0.2,
+        signal_strength=0.6,
+    )
+    bus = LiveAxlMessageBus(node_urls=["ws://127.0.0.1:3999"])
+
+    with patch("hivemind_sdk.axl_pool.AXLPoolManager", EmptyPool):
+        result = bus.broadcast_scenario(scenario=scenario, agent_count=3)
+
+    assert result["mode"] == "unavailable"
+    assert result["nodes_online"] == 0
+    assert result["messages"] == 0

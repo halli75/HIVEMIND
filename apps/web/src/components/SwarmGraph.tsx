@@ -165,7 +165,7 @@ function SwarmGraphCanvas({
           : agent.tier === "T2"
             ? "rgba(246, 240, 227, 0.45)"
             : archetypeColor;
-      const label = isWinner ? `★ WINNER · ${agent.id}` : agent.id;
+      const label = isWinner ? `WINNER / ${agent.id}` : agent.id;
       const angle = index * 2.399963;
       const ring = Math.sqrt((index + 1) / Math.max(1, renderable.length));
       const fallbackX = Math.cos(angle) * ring * 50;
@@ -240,12 +240,14 @@ function SwarmGraphCanvas({
     previousWinnerIdRef.current = winnerId;
     try {
       const display = sigma.getNodeDisplayData(winnerId);
-      if (display) {
-        sigma.getCamera().animate(
-          { x: display.x, y: display.y, ratio: 0.55 },
-          { duration: 800 },
-        );
+      if (!display) {
+        previousWinnerIdRef.current = null;
+        return;
       }
+      sigma.getCamera().animate(
+        { x: display.x, y: display.y, ratio: 0.55 },
+        { duration: 800 },
+      );
     } catch {
       // sigma may not be ready yet on first paint; the next agents update will retry
       previousWinnerIdRef.current = null;
@@ -269,7 +271,7 @@ function GraphLegend() {
       >
         <span>Legend</span>
         <span className="graph-legend-chevron" aria-hidden>
-          {open ? "−" : "+"}
+          {open ? "-" : "+"}
         </span>
       </button>
       {open ? (
@@ -293,15 +295,15 @@ function GraphLegend() {
             <div className="graph-legend-tiers">
               <span className="graph-legend-row">
                 <span className="graph-legend-tier-dot tier-large" />
-                <span>T1 — 0G AI</span>
+                <span>T1 - 0G AI</span>
               </span>
               <span className="graph-legend-row">
                 <span className="graph-legend-tier-dot tier-medium" />
-                <span>T2 — local rules</span>
+                <span>T2 - local rules</span>
               </span>
               <span className="graph-legend-row">
                 <span className="graph-legend-tier-dot tier-small" />
-                <span>T3 — idle</span>
+                <span>T3 - idle</span>
               </span>
             </div>
           </div>
@@ -386,7 +388,7 @@ export function SwarmGraph({
         {showOverlay ? (
           <div className="graph-connecting-overlay">
             <div className="graph-spinner" aria-hidden />
-            <p>Connecting to swarm…</p>
+            <p>Connecting to swarm...</p>
           </div>
         ) : null}
       </div>

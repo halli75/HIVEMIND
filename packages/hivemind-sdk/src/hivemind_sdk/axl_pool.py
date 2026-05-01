@@ -85,7 +85,11 @@ class AXLPoolManager:
 
     @property
     def failed_node_urls(self) -> list[str]:
-        return [url for url in self._node_urls if url not in self._connections]
+        return [
+            url
+            for url in self._node_urls
+            if url not in self._connections or not self._connections[url].alive
+        ]
 
     async def connect(self) -> None:
         for url in self._node_urls:

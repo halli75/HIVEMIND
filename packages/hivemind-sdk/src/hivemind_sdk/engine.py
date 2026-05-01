@@ -36,6 +36,8 @@ from .providers import (
     MockInferenceProvider,
     SeedReplay,
     StorageProvider,
+    _market_state_from_scenario,
+    _memory_from_scenario,
     use_mock_inference,
 )
 
@@ -812,52 +814,6 @@ class SwarmEngine:
                     f"  {agent.agent_id} [{agent.archetype.name}] -> {state.action} "
                     f"(conf={state.confidence:.2f}, score={state.score:.2f})"
                 )
-
-
-def _market_state_from_scenario(scenario: Scenario) -> dict[str, Any]:
-    price_delta = scenario.sentiment * scenario.signal_strength
-    return {
-        "scenario_id": scenario.scenario_id,
-        "volatility": scenario.volatility,
-        "liquidity_delta": scenario.liquidity_delta,
-        "sentiment": scenario.sentiment,
-        "gas_pressure": scenario.gas_pressure,
-        "signal_strength": scenario.signal_strength,
-        "price_delta": price_delta,
-        "price_delta_pct": price_delta,
-        "pool_spread_bps": max(0.0, scenario.volatility * 30.0 - 4.0),
-        "peg_delta": scenario.liquidity_delta * 0.005,
-    }
-
-
-def _memory_from_scenario(scenario: Scenario, agent_id: str, jitter: float) -> dict[str, Any]:
-    return {
-        "axl_signals": [
-            {
-                "id": f"sig-{agent_id}-mkt",
-                "type": "MARKET_SIGNAL",
-                "direction": "buy" if scenario.sentiment >= 0 else "sell",
-                "confidence": min(0.99, abs(scenario.sentiment) * scenario.signal_strength + jitter * 0.1),
-            },
-            {
-                "id": f"sig-{agent_id}-trade",
-                "type": "TRADE_INTENT",
-                "size_usd": 200_000 + scenario.volatility * 600_000,
-            },
-        ],
-        "lp_position": {
-            "in_range": scenario.liquidity_delta >= -0.4,
-            "impermanent_loss_delta": max(0.0, scenario.volatility * 0.04 - 0.005),
-            "range_lower": 1800 - scenario.volatility * 300,
-            "range_upper": 2200 + scenario.volatility * 300,
-        },
-        "social_graph": [
-            {"agent_id": "leader-001", "stake": 1_000_000, "vote": "for"},
-            {"agent_id": "leader-002", "stake": 750_000, "vote": "abstain"},
-        ],
-        "min_spread_bps": 8,
-        "portfolio": 100_000.0,
-    }
 
 
 def _agent_state_from_decision(
