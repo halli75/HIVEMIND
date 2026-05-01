@@ -89,6 +89,7 @@ export type RunTranscript = {
   axlTranscriptPath: string;
   zeroGStorageUri: string;
   zeroGStorageHash: string;
+  inftStatus: string;
   inftToken: string;
   inftAddress: string;
   uniswapQuote: string;

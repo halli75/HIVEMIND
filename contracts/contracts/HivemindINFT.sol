@@ -2,9 +2,10 @@
 pragma solidity ^0.8.24;
 
 /// @title HivemindINFT
-/// @notice Minimal ERC-7857 iNFT for HIVEMIND - records the winning agent with
-/// encrypted strategy on 0G Storage. Implements ERC-7857 transfer/clone/authorizeUsage
-/// at hackathon level (proof arg accepted; TEE/ZKP verification deferred).
+/// @notice Minimal ERC-721-compatible iNFT for HIVEMIND - records the winning
+/// agent with encrypted strategy on 0G Storage. Keeps ERC-7857-style
+/// transfer/clone/authorizeUsage hooks at hackathon level (proof arg accepted;
+/// TEE/ZKP verification deferred).
 contract HivemindINFT {
     struct IntelligenceRef {
         string storageUri;
@@ -23,11 +24,20 @@ contract HivemindINFT {
 
     mapping(uint256 => address) private _owners;
     mapping(address => uint256) private _balances;
+    mapping(uint256 => address) private _tokenApprovals;
+    mapping(address => mapping(address => bool)) private _operatorApprovals;
     mapping(uint256 => IntelligenceRef) private _intelligenceRefs;
     mapping(uint256 => mapping(address => bool)) private _authorizations;
 
-    // ERC-721-like events
+    bytes4 private constant _ERC165_INTERFACE_ID = 0x01ffc9a7;
+    bytes4 private constant _ERC721_INTERFACE_ID = 0x80ac58cd;
+    bytes4 private constant _ERC721_METADATA_INTERFACE_ID = 0x5b5e139f;
+    bytes4 private constant _ERC721_RECEIVED = 0x150b7a02;
+
+    // ERC-721 events
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
     event AgentCrystallized(
         uint256 indexed tokenId,
         address indexed owner,
@@ -54,6 +64,9 @@ contract HivemindINFT {
     error TokenDoesNotExist();
     error InvalidRecipient();
     error EmptyStorageUri();
+    error NotApprovedOrOwner();
+    error ApprovalToCurrentOwner();
+    error UnsafeRecipient();
 
     constructor(address initialMinter) {
         if (initialMinter == address(0)) revert InvalidRecipient();
@@ -77,8 +90,7 @@ contract HivemindINFT {
         if (bytes(storageUri).length == 0) revert EmptyStorageUri();
 
         tokenId = nextTokenId++;
-        _owners[tokenId] = to;
-        _balances[to] += 1;
+        _mint(to, tokenId);
         _intelligenceRefs[tokenId] = IntelligenceRef({
             storageUri: storageUri,
             storageHash: storageHash,
@@ -87,10 +99,56 @@ contract HivemindINFT {
             aiq: aiq,
             mintedAt: uint64(block.timestamp)
         });
-
-        emit Transfer(address(0), to, tokenId);
         emit AgentCrystallized(tokenId, to, storageUri, storageHash, model, aiq);
         emit MetadataUpdated(tokenId, storageHash);
+    }
+
+    // -------------------------------------------------------------------------
+    // ERC-165 / ERC-721 / ERC-721 Metadata
+    // -------------------------------------------------------------------------
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == _ERC165_INTERFACE_ID
+            || interfaceId == _ERC721_INTERFACE_ID
+            || interfaceId == _ERC721_METADATA_INTERFACE_ID;
+    }
+
+    function approve(address to, uint256 tokenId) external {
+        address owner = _ownerOfExisting(tokenId);
+        if (to == owner) revert ApprovalToCurrentOwner();
+        if (msg.sender != owner && !_operatorApprovals[owner][msg.sender]) revert NotApprovedOrOwner();
+
+        _tokenApprovals[tokenId] = to;
+        emit Approval(owner, to, tokenId);
+    }
+
+    function getApproved(uint256 tokenId) external view returns (address) {
+        _ownerOfExisting(tokenId);
+        return _tokenApprovals[tokenId];
+    }
+
+    function setApprovalForAll(address operator, bool approved) external {
+        if (operator == msg.sender) revert ApprovalToCurrentOwner();
+        _operatorApprovals[msg.sender][operator] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    function isApprovedForAll(address owner, address operator) external view returns (bool) {
+        return _operatorApprovals[owner][operator];
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) public {
+        if (!_isApprovedOrOwner(msg.sender, tokenId)) revert NotApprovedOrOwner();
+        _transfer(from, to, tokenId);
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId) external {
+        safeTransferFrom(from, to, tokenId, "");
+    }
+
+    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory data) public {
+        transferFrom(from, to, tokenId);
+        if (!_checkOnERC721Received(msg.sender, from, to, tokenId, data)) revert UnsafeRecipient();
     }
 
     // -------------------------------------------------------------------------
@@ -106,16 +164,9 @@ contract HivemindINFT {
         bytes calldata sealedKey,
         bytes calldata /*proof*/
     ) external {
-        if (_owners[tokenId] == address(0)) revert TokenDoesNotExist();
-        if (msg.sender != from) revert NotTokenOwner();
-        if (_owners[tokenId] != from) revert NotTokenOwner();
-        if (to == address(0)) revert InvalidRecipient();
+        if (!_isApprovedOrOwner(msg.sender, tokenId)) revert NotApprovedOrOwner();
+        _transfer(from, to, tokenId);
 
-        _owners[tokenId] = to;
-        _balances[from] -= 1;
-        _balances[to] += 1;
-
-        emit Transfer(from, to, tokenId);
         emit PublishedSealedKey(tokenId, sealedKey);
     }
 
@@ -131,11 +182,9 @@ contract HivemindINFT {
         if (to == address(0)) revert InvalidRecipient();
 
         newTokenId = nextTokenId++;
-        _owners[newTokenId] = to;
-        _balances[to] += 1;
+        _mint(to, newTokenId);
         _intelligenceRefs[newTokenId] = _intelligenceRefs[tokenId];
 
-        emit Transfer(address(0), to, newTokenId);
         emit MetadataUpdated(newTokenId, _intelligenceRefs[newTokenId].storageHash);
         emit PublishedSealedKey(newTokenId, sealedKey);
     }
@@ -183,9 +232,7 @@ contract HivemindINFT {
     // -------------------------------------------------------------------------
 
     function ownerOf(uint256 tokenId) external view returns (address) {
-        address owner = _owners[tokenId];
-        if (owner == address(0)) revert TokenDoesNotExist();
-        return owner;
+        return _ownerOfExisting(tokenId);
     }
 
     function balanceOf(address owner) external view returns (uint256) {
@@ -211,6 +258,60 @@ contract HivemindINFT {
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
+
+    function _ownerOfExisting(uint256 tokenId) private view returns (address owner) {
+        owner = _owners[tokenId];
+        if (owner == address(0)) revert TokenDoesNotExist();
+    }
+
+    function _isApprovedOrOwner(address spender, uint256 tokenId) private view returns (bool) {
+        address owner = _ownerOfExisting(tokenId);
+        return spender == owner
+            || _tokenApprovals[tokenId] == spender
+            || _operatorApprovals[owner][spender];
+    }
+
+    function _mint(address to, uint256 tokenId) private {
+        if (to == address(0)) revert InvalidRecipient();
+
+        _owners[tokenId] = to;
+        _balances[to] += 1;
+        emit Transfer(address(0), to, tokenId);
+    }
+
+    function _transfer(address from, address to, uint256 tokenId) private {
+        if (to == address(0)) revert InvalidRecipient();
+        address owner = _ownerOfExisting(tokenId);
+        if (owner != from) revert NotTokenOwner();
+
+        delete _tokenApprovals[tokenId];
+        _owners[tokenId] = to;
+        _balances[from] -= 1;
+        _balances[to] += 1;
+
+        emit Transfer(from, to, tokenId);
+    }
+
+    function _checkOnERC721Received(
+        address operator,
+        address from,
+        address to,
+        uint256 tokenId,
+        bytes memory data
+    ) private returns (bool) {
+        if (to.code.length == 0) {
+            return true;
+        }
+
+        (bool success, bytes memory returndata) = to.call(
+            abi.encodeWithSelector(_ERC721_RECEIVED, operator, from, tokenId, data)
+        );
+        if (!success || returndata.length < 32) {
+            return false;
+        }
+
+        return abi.decode(returndata, (bytes4)) == _ERC721_RECEIVED;
+    }
 
     function _toString(uint256 value) private pure returns (string memory) {
         if (value == 0) {

@@ -2,32 +2,36 @@
 
 ## Integration Summary
 
-- Mode: mock scaffold pending live Sepolia run.
-- Target flow: approval check, quote, swap, receipt capture.
-- Current artifact: `data/snapshots/uniswap-quote.seed.json`.
+- Mode: live Sepolia quote verified; swap remains gated.
+- Target flow: quote, human-reviewed swap, receipt capture.
+- Current artifacts: `runs/proof-20260429-161627/06b-uniswap-quote-formatted.txt` and API quote in `02-scenario.json`.
 
 ## What Worked
 
 - Placeholder quote schema captures amount in, amount out, route, price impact, approval state, and transaction shape.
 - Environment variables keep API key, swapper, and token addresses out of source control.
+- Live `/v1/quote` returned a Sepolia WETH to USDC route for `0.001 WETH`.
+- `run_swap.py` correctly refused to sign when `HIVEMIND_ALLOW_TESTNET_SWAP=true` was not enabled.
 
 ## Issues / Questions
 
-- Confirm final Sepolia token pair and liquidity before the live demo.
 - Confirm whether the selected route should force protocol filters or accept default routing.
-- Capture any API error messages or request IDs here during live testing.
+- Quote response route is nested, so client formatting needed recursive `amountOut` extraction for readable demo output.
+- Approval flow is not yet proven because no Sepolia swap was submitted in this rehearsal.
 
 ## API Notes
 
 | Date | Endpoint | Chain | Result | Notes |
 | --- | --- | --- | --- | --- |
 | 2026-04-26 | `/v1/quote` | Sepolia mock | Seeded | No live request made by this scaffold worker. |
+| 2026-04-29 | `/v1/quote` | Sepolia | Live success | Quote id `3301ca8c-df76-4c88-a6ee-efc2ebfef35d`; `0.001 WETH -> 8.75588 USDC`; price impact `0.02`. |
+| 2026-04-29 | `run_swap.py` | Sepolia | Guarded | Refused to sign because `HIVEMIND_ALLOW_TESTNET_SWAP=true` was not enabled. |
 
 ## Swap Evidence
 
 | Date | Agent | Token In | Token Out | Tx Hash | Receipt Status | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| TBD | agent-alpha | ETH | USDC | TBD | TBD | Fill after human-reviewed Sepolia swap. |
+| 2026-04-29 | agent-014 | WETH | USDC | Not submitted | Gated | Quote only; no transaction signed. |
 
 ## Feedback For Uniswap
 
@@ -39,20 +43,20 @@
 
 ### Initial Setup & Authentication
 
-_Pending live run. Capture: dashboard signup friction, key issuance time, header name (`x-api-key`), any rate-limit headers observed._
+API key authentication worked with the `x-api-key` header. No additional auth ceremony was needed for quote-only access.
 
 ### Quote Endpoint Experience
 
-_Pending live run. Capture: `/v1/quote` p50/p95 latency, response size, route shape, presence/absence of `priceImpact` on Sepolia, any deprecation warnings._
+Quote endpoint returned a usable Sepolia route and `priceImpact`. The route shape is nested enough that demo tooling should not assume `amountOut` is top-level.
 
 ### Swap Execution Experience
 
-_Pending live run. Capture: `/v1/swap` payload requirements, gas fields returned vs needed, permit2 / approval flow on Sepolia, signing surprises in `eth_account`._
+Not exercised yet. Swap submission remains behind `HIVEMIND_ALLOW_TESTNET_SWAP=true` and the script's explicit prompt.
 
 ### Sepolia Testnet Gaps
 
-_Pending live run. Capture: pools that exist on mainnet but not Sepolia, liquidity issues for WETH/USDC, RPC reliability across providers (publicnode, Alchemy, Infura)._
+WETH/USDC liquidity was sufficient for a `0.001 WETH` quote in this rehearsal.
 
 ### Bugs Encountered
 
-_Pending live run. Capture: error response shapes, opaque error codes, mismatches between docs and actual response, any retries needed._
+Client formatting bug: the first quote-only output printed `amount out: ?` because `amountOut` was nested inside the route. Fixed by recursively extracting `amountOut`.

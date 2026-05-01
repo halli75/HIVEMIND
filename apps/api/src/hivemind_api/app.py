@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
+
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(Path(__file__).resolve().parents[4] / ".env", override=False)
+except ImportError:
+    pass
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +17,9 @@ from pydantic import BaseModel, Field
 
 from hivemind_sdk import (
     CrystallizationPipeline,
+    ExecutionProvider,
     HybridInferenceProvider,
+    LiveAxlMessageBus,
     LocalAxlMessageBus,
     LocalInferenceProvider,
     LocalStorageUploadProvider,
@@ -18,6 +27,7 @@ from hivemind_sdk import (
     Scenario,
     ScoringEngine,
     SwarmEngine,
+    UniswapExecutionProvider,
     ZeroGComputeInferenceProvider,
 )
 
@@ -60,6 +70,49 @@ def _build_crystallization_pipeline() -> CrystallizationPipeline:
         storage_provider=LocalStorageUploadProvider(),
         web3_provider=MockWeb3Provider(),
         owner_address=owner_address,
+    )
+
+
+def _build_execution_provider() -> ExecutionProvider | None:
+    """Return a live UniswapExecutionProvider or None (falls back to LocalExecutionProvider)."""
+    use_mock = os.environ.get("HIVEMIND_USE_MOCK_UNISWAP", "true").lower() in {"1", "true", "yes"}
+    if use_mock:
+        return None
+
+    api_key = os.environ.get("UNISWAP_API_KEY", "").strip()
+    base_url = os.environ.get("UNISWAP_API_BASE_URL", "https://trade-api.gateway.uniswap.org").strip()
+    rpc_url = os.environ.get("SEPOLIA_RPC_URL", "https://ethereum-sepolia-rpc.publicnode.com").strip()
+    private_key = os.environ.get("WALLET_PRIVATE_KEY", "").strip()
+
+    if not api_key or not private_key:
+        import warnings
+        warnings.warn(
+            "HIVEMIND_USE_MOCK_UNISWAP=false but UNISWAP_API_KEY or WALLET_PRIVATE_KEY "
+            "is missing - falling back to mock execution provider",
+            stacklevel=2,
+        )
+        return None
+
+    import sys as _sys
+    _exec_root = str(Path(__file__).resolve().parents[4] / "apps" / "execution")
+    if _exec_root not in _sys.path:
+        _sys.path.insert(0, _exec_root)
+
+    from uniswap_client import UniswapClient, SEPOLIA_WETH, SEPOLIA_USDC  # type: ignore[import-not-found]
+    from eth_account import Account  # type: ignore[import-not-found]
+
+    token_in = os.environ.get("UNISWAP_TOKEN_IN_ADDRESS", SEPOLIA_WETH).strip() or SEPOLIA_WETH
+    token_out = os.environ.get("UNISWAP_TOKEN_OUT_ADDRESS", SEPOLIA_USDC).strip() or SEPOLIA_USDC
+    amount_in_wei = int(os.environ.get("UNISWAP_AMOUNT_IN_WEI", "1000000000000000"))
+    swapper = Account.from_key(private_key).address
+
+    client = UniswapClient(api_key=api_key, base_url=base_url, rpc_url=rpc_url)
+    return UniswapExecutionProvider(
+        client=client,
+        swapper_address=swapper,
+        token_in=token_in,
+        token_out=token_out,
+        amount_in_wei=amount_in_wei,
     )
 
 
@@ -112,6 +165,53 @@ def _env_int(name: str, *, default: int) -> int:
     return int(value)
 
 
+def _looks_like_storage_unavailable(output: str) -> bool:
+    normalized = output.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "storage_unavailable",
+            "service unavailable",
+            "503",
+            "502",
+            "504",
+        )
+    )
+
+
+def _looks_like_storage_upload_failed(output: str) -> bool:
+    normalized = output.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "storage_upload_failed",
+            "failed to submit transaction",
+            "providererror: execution reverted",
+        )
+    )
+
+
+def _redact_process_output(output: str) -> str:
+    """Keep subprocess diagnostics useful without echoing secrets to API callers."""
+    redacted = output
+    patterns = (
+        (r"hf_[A-Za-z0-9_=-]+", "hf_[REDACTED]"),
+        (r"app-sk-[A-Za-z0-9_=-]+", "app-sk-[REDACTED]"),
+        (
+            r"(?i)((?:DEPLOYER|WALLET)_PRIVATE_KEY\s*=\s*)(0x)?[a-f0-9]{64}",
+            r"\1[REDACTED]",
+        ),
+        (
+            r"(?i)((?:ZERO_G_COMPUTE_BEARER_TOKEN|UNISWAP_API_KEY)\s*=\s*)\S+",
+            r"\1[REDACTED]",
+        ),
+        (r"(?i)(private key(?:\s+\w+){0,3}\s*[:=]\s*)(0x)?[a-f0-9]{64}", r"\1[REDACTED]"),
+    )
+    for pattern, replacement in patterns:
+        redacted = re.sub(pattern, replacement, redacted)
+    return redacted
+
+
 def _use_mock_0g() -> bool:
     if "HIVEMIND_USE_MOCK_0G" in os.environ:
         return _env_bool("HIVEMIND_USE_MOCK_0G", default=True)
@@ -120,14 +220,15 @@ def _use_mock_0g() -> bool:
     return True
 
 
-def _compose_run_mode(*, local_axl: bool, live_0g: bool) -> str | None:
-    if local_axl and live_0g:
-        return "local_axl+live_0g"
-    if local_axl:
-        return "local_axl"
+def _compose_run_mode(*, local_axl: bool, live_axl: bool, live_0g: bool) -> str | None:
+    parts = []
+    if live_axl:
+        parts.append("live_axl")
+    elif local_axl:
+        parts.append("local_axl")
     if live_0g:
-        return "live_0g"
-    return None
+        parts.append("live_0g")
+    return "+".join(parts) if parts else None
 
 
 def _default_engine(
@@ -135,6 +236,7 @@ def _default_engine(
     seed_snapshot_dir: str | Path | None = None,
     transcript_root: str | Path | None = None,
     axl_transcript_path: str | Path | None = None,
+    execution_provider: ExecutionProvider | None = None,
 ) -> SwarmEngine:
     root = _repo_root()
     seed_dir = _resolve_repo_path(
@@ -146,11 +248,19 @@ def _default_engine(
     use_mock_0g = _use_mock_0g()
     message_bus = None
     local_axl_enabled = False
-    if transcript_path_value and not use_mock_gensyn:
-        transcript_path = _resolve_repo_path(root, transcript_path_value)
-        if transcript_path.exists() and transcript_path.suffix == ".jsonl":
-            message_bus = LocalAxlMessageBus(transcript_path=transcript_path)
-            local_axl_enabled = True
+    live_axl_enabled = False
+    if not use_mock_gensyn:
+        axl_node_urls_str = os.environ.get("AXL_NODE_URLS", "").strip()
+        axl_node_urls = [u.strip() for u in axl_node_urls_str.split(",") if u.strip()] if axl_node_urls_str else []
+        if axl_node_urls:
+            axl_pool_id = os.environ.get("AXL_POOL_ID", "hivemind-main")
+            message_bus = LiveAxlMessageBus(node_urls=axl_node_urls, pool_id=axl_pool_id)
+            live_axl_enabled = True
+        elif transcript_path_value:
+            transcript_path = _resolve_repo_path(root, transcript_path_value)
+            if transcript_path.exists() and transcript_path.suffix == ".jsonl":
+                message_bus = LocalAxlMessageBus(transcript_path=transcript_path)
+                local_axl_enabled = True
     inference_provider: LocalInferenceProvider | HybridInferenceProvider
     if not use_mock_0g:
         api_base_url = os.environ.get("ZERO_G_COMPUTE_API_BASE_URL")
@@ -175,8 +285,9 @@ def _default_engine(
         seed_snapshot_dir=seed_dir,
         transcript_root=runs_dir,
         message_bus=message_bus,
-        run_mode=_compose_run_mode(local_axl=local_axl_enabled, live_0g=not use_mock_0g),
+        run_mode=_compose_run_mode(local_axl=local_axl_enabled, live_axl=live_axl_enabled, live_0g=not use_mock_0g),
         inference_provider=inference_provider,
+        execution_provider=execution_provider,
     )
 
 
@@ -199,6 +310,7 @@ def create_app(
         seed_snapshot_dir=seed_snapshot_dir,
         transcript_root=transcript_root,
         axl_transcript_path=axl_transcript_path,
+        execution_provider=_build_execution_provider(),
     )
     app.state.websocket_hub = WebSocketHub()
     app.state.scoring_engine = ScoringEngine()
@@ -285,6 +397,125 @@ def create_app(
             "rate_limited_count": rate_limited,
             "rate_limited": rate_limited > 0,
             "rate_limited_agents": list(engine.last_rate_limited_agents),
+        }
+
+    @app.post("/mint")
+    async def mint_inft() -> dict[str, Any]:
+        """Trigger a real iNFT mint: encrypt -> 0G Storage -> mintAgent on 0G Galileo.
+
+        Delegates to contracts/scripts/mint-inft.ts via npm run mint.
+        Requires INFT_CONTRACT_ADDRESS, DEPLOYER_PRIVATE_KEY, ZERO_G_RPC_URL in env.
+        """
+        import asyncio as _asyncio
+        import re as _re
+
+        inft_address = os.environ.get("INFT_CONTRACT_ADDRESS", "").strip()
+        if not inft_address:
+            raise HTTPException(status_code=400, detail="INFT_CONTRACT_ADDRESS not set in environment")
+
+        contracts_dir = _repo_root() / "contracts"
+        if not contracts_dir.exists():
+            raise HTTPException(status_code=500, detail="contracts/ directory not found")
+
+        npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
+        env = {**os.environ}
+        env.setdefault("HIVEMIND_API_URL", "http://localhost:8000")
+        timeout_seconds = _env_int("MINT_SCRIPT_TIMEOUT_SECONDS", default=240)
+
+        proc = None
+        try:
+            proc = await _asyncio.create_subprocess_exec(
+                npm_cmd, "run", "mint",
+                cwd=str(contracts_dir),
+                env=env,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await _asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+        except _asyncio.TimeoutError:
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except ProcessLookupError:
+                    pass
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "status": "mint_timeout",
+                    "message": f"Mint script timed out after {timeout_seconds}s",
+                },
+            )
+
+        output = stdout.decode("utf-8", errors="replace")
+        output_tail = _redact_process_output(output[-3000:])
+
+        if proc.returncode != 0:
+            if _looks_like_storage_upload_failed(output):
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "status": "storage_upload_failed",
+                        "message": "0G Storage upload reached the storage network, but the storage fee transaction failed before minting.",
+                        "retry": "Verify the selected 0G Storage indexer/Flow contract and retry before minting.",
+                        "output_tail": output_tail,
+                    },
+                )
+            if _looks_like_storage_unavailable(output):
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "status": "storage_unavailable",
+                        "message": "0G Storage upload is unavailable; encryption succeeded but minting did not start.",
+                        "retry": "Retry POST /mint after the 0G Storage testnet recovers.",
+                        "output_tail": output_tail,
+                    },
+                )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "status": "mint_failed",
+                    "message": f"Mint script exited {proc.returncode}",
+                    "output_tail": output_tail,
+                },
+            )
+
+        token_id_match = _re.search(r"Token ID:\s*(\d+)", output)
+        tx_match = _re.search(r"Tx:\s*(https?://\S+)", output)
+        storage_match = _re.search(r"Storage:\s*(https?://\S+)", output)
+        storage_uri_match = _re.search(r"Storage URI:\s*(\S+)", output)
+        root_hash_match = _re.search(r"rootHash:\s*(\S+)", output)
+        content_hash_match = _re.search(r"Content hash \(sha256\):\s*([0-9a-fA-F]+)", output)
+        tx_hash_match = _re.search(r"/tx/(0x[a-fA-F0-9]+)", tx_match.group(1) if tx_match else "")
+
+        token_id = int(token_id_match.group(1)) if token_id_match else None
+        tx_hash = tx_hash_match.group(1) if tx_hash_match else None
+        storage_uri = storage_uri_match.group(1) if storage_uri_match else None
+        storage_hash = root_hash_match.group(1) if root_hash_match else None
+        content_hash = content_hash_match.group(1) if content_hash_match else None
+
+        snapshot = app.state.engine.record_inft_mint(
+            token_id=token_id,
+            tx_hash=tx_hash,
+            contract_address=inft_address,
+            storage_uri=storage_uri,
+            storage_hash=storage_hash,
+            content_hash=content_hash,
+        )
+        await app.state.websocket_hub.broadcast({"type": "snapshot", "snapshot": snapshot.to_dict()})
+
+        return {
+            "status": "minted",
+            "token_id": token_id,
+            "tx_hash": tx_hash,
+            "tx_url": tx_match.group(1) if tx_match else None,
+            "storage_url": storage_match.group(1) if storage_match else None,
+            "storage_uri": storage_uri,
+            "storage_hash": storage_hash,
+            "content_hash": content_hash,
+            "contract": inft_address,
+            "proof": snapshot.proof["inft"],
+            "output_tail": output_tail,
         }
 
     @app.websocket("/ws/state")

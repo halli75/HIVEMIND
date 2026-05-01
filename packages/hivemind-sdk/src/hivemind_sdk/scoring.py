@@ -49,25 +49,34 @@ def pnl_bps_for(action: str, archetype: AgentArchetype, scenario: Scenario, jitt
     directional_signal = scenario.sentiment * scenario.signal_strength
     liquidity_stress = max(0.0, -scenario.liquidity_delta)
     gas_drag = scenario.gas_pressure * 18.0
-    volatility_opportunity = scenario.volatility * archetype.risk_appetite * 28.0
+    volatility_opportunity = scenario.volatility * archetype.risk_appetite * 60.0
 
     if action == "buy":
-        pnl = directional_signal * 85.0 + volatility_opportunity - gas_drag
+        pnl = directional_signal * 150.0 + volatility_opportunity - gas_drag
     elif action == "sell":
-        pnl = -directional_signal * 80.0 + volatility_opportunity * 0.72 - gas_drag
+        pnl = -directional_signal * 140.0 + volatility_opportunity * 0.72 - gas_drag
+    elif action == "arb":
+        spread_bps = max(0.0, scenario.volatility * 30.0 - 4.0)
+        pnl = spread_bps * archetype.risk_appetite * 0.8 + volatility_opportunity * 0.5 - gas_drag * 0.6
+    elif action == "front_run":
+        pnl = volatility_opportunity * 0.9 + abs(directional_signal) * 60.0 - gas_drag * 1.5
+    elif action == "rebalance":
+        pnl = archetype.liquidity_bias * 30.0 - scenario.volatility * 20.0 - gas_drag * 0.3
     elif action == "provide_liquidity":
         pnl = scenario.liquidity_delta * 42.0 + archetype.liquidity_bias * 16.0 - scenario.volatility * 12.0
     elif action == "hedge":
         pnl = scenario.volatility * archetype.hedge_bias * 32.0 + liquidity_stress * 20.0 - gas_drag * 0.45
-    else:
+    elif action == "vote":
+        pnl = archetype.aiq_base * 12.0 - gas_drag * 0.1
+    else:  # hold
         pnl = 2.0 - scenario.volatility * 8.0 - gas_drag * 0.2
 
-    return round(pnl + (jitter - 0.5) * 8.0, 4)
+    return round(pnl + (jitter - 0.5) * 40.0, 4)
 
 
 def score_for(confidence: float, pnl_bps: float, aiq: float, tier: int) -> float:
     tier_bonus = {1: 0.0, 2: 2.5, 3: 4.0}[tier]
-    return round(pnl_bps * 0.52 + confidence * 32.0 + aiq * 18.0 + tier_bonus, 4)
+    return round(pnl_bps * 0.20 + confidence * 22.0 + aiq * 14.0 + tier_bonus, 4)
 
 
 def _mean(values: list[float]) -> float:
