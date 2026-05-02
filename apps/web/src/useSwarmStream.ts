@@ -37,6 +37,7 @@ type ApiAgent = {
   pnl_bps: number;
   aiq: number;
   score: number;
+  rationale?: string;
 };
 
 type ApiTierMetric = {
@@ -192,6 +193,11 @@ const expandVisualAgents = (
       confidence: source.confidence,
       strategy: `${source.archetype} / ${source.action}`,
       archetype: archetypeFromApi(source.archetype),
+      sourceId: source.agent_id,
+      action: source.action,
+      pnl_bps: source.pnl_bps,
+      aiq: source.aiq,
+      rationale: source.rationale,
     };
   });
 };
