@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Protocol, TypeVar, cast
+from typing import Any, Coroutine, Protocol, TypeVar, cast
 
 import httpx
 
@@ -681,7 +681,7 @@ def _state_from_fallback(
     )
 
 
-def _run_coroutine_blocking(coro: Awaitable[_T]) -> _T:
+def _run_coroutine_blocking(coro: Coroutine[Any, Any, _T]) -> _T:
     """Drive a coroutine to completion from a sync caller, even when an event
     loop is already running on the current thread.
 
@@ -733,6 +733,10 @@ class ZeroGComputeInferenceProvider:
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def timeout(self) -> float:
+        return self._timeout
 
     @property
     def last_error(self) -> str | None:
@@ -845,6 +849,8 @@ class ZeroGComputeInferenceProvider:
         prompt = _build_inference_prompt(archetype, scenario)
         started = time.perf_counter()
         last_exc: Exception | None = None
+        action: "Action" = cast("Action", "hold")
+        confidence: float = 0.0
         try:
             resp: httpx.Response | None = None
             for attempt in range(4):
@@ -861,7 +867,8 @@ class ZeroGComputeInferenceProvider:
                     await asyncio.sleep(2.0 * (attempt + 1))
                     continue
                 break
-            assert resp is not None
+            if resp is None:
+                raise RuntimeError("no response received after retry loop")
             resp.raise_for_status()
             raw = _parse_model_json(resp.json()["choices"][0]["message"]["content"])
             action, confidence = _action_from_raw(raw)
@@ -976,6 +983,7 @@ class HybridInferenceProvider:
         for state in refined:
             if state.inference_source == "local_fallback" and state.rationale.startswith("0G fallback: "):
                 last_error = state.rationale.removeprefix("0G fallback: ").split("; ", 1)[0]
+                break
         self._last_metrics = HybridInferenceMetrics(
             mode="0g_compute",
             model=self._real.model,
@@ -1006,7 +1014,7 @@ class HybridInferenceProvider:
 
         refined: list["AgentState"] = []
         per_agent_samples: list[float] = []
-        async with httpx.AsyncClient(timeout=self._real._timeout) as client:
+        async with httpx.AsyncClient(timeout=self._real.timeout) as client:
             for offset in range(0, len(requests), BATCH_SIZE):
                 window = requests[offset : offset + BATCH_SIZE]
                 started = time.perf_counter()
