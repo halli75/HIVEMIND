@@ -1389,11 +1389,17 @@ textarea {
 
 .table-row {
   display: grid;
-  grid-template-columns: 38px 1fr 1.2fr 36px 50px 60px;
+  /* Numeric trailing columns (Score, PNL) need their own width: PNL can hit
+     `-1234.56%` (≈9 chars in JetBrains Mono) which overflows a 60px slot
+     and gets clipped against the row's right padding. Anchor PNL with
+     min-content so it always reserves enough space, right-align numeric
+     cells so the sign/% stay glued to the row edge, and let the Strategy
+     column absorb the remaining space. */
+  grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1.1fr) 32px 52px minmax(72px, max-content);
   gap: 6px;
   align-items: center;
   border-bottom: 1px solid var(--border-dim);
-  padding: 7px 10px;
+  padding: 7px 10px 7px 10px;
   color: var(--text);
   font-size: 0.74rem;
   letter-spacing: 0.02em;
@@ -1406,6 +1412,24 @@ textarea {
   cursor: pointer;
   transition: background 160ms ease, border-color 160ms ease;
   font-family: inherit;
+}
+
+.table-row > span,
+.table-row > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Right-align the numeric trailing cells (Score in column 5, PNL in
+   column 6) so trailing characters never disappear under the row's
+   right padding. Column-based selectors keep the head row in sync
+   without per-cell class plumbing. */
+.table-row > :nth-child(5),
+.table-row > :nth-child(6) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 button.table-row {
