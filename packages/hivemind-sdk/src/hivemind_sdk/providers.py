@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Awaitable, Protocol, TypeVar, cast
 
 import httpx
 
@@ -601,6 +603,116 @@ def _safe_error(exc: Exception, token: str) -> str:
     return message[:240]
 
 
+BATCH_SIZE = 5
+"""Default concurrent fan-out for 0G Compute inference.
+
+Tier 1 evaluations are dispatched in windows of this size against a shared
+`httpx.AsyncClient`. The 0G Compute proxy does not expose a native batch
+endpoint, so "batch" here means concurrent HTTP calls coordinated via
+`asyncio.gather()`. Larger windows do not necessarily improve latency once
+the upstream rate limiter starts returning 429s.
+"""
+
+_T = TypeVar("_T")
+
+
+def _action_from_raw(raw: dict[str, Any]) -> tuple["Action", float]:
+    """Validate the parsed model JSON and return (action, confidence)."""
+    action_str = str(raw["action"]).lower()
+    if action_str not in {"buy", "sell", "hold"}:
+        raise ValueError(f"unexpected action: {action_str}")
+    action = cast("Action", action_str)
+    confidence = max(0.0, min(1.0, float(raw["confidence"])))
+    return action, confidence
+
+
+def _state_from_inference(
+    *,
+    agent_id: str,
+    archetype: "AgentArchetype",
+    scenario: "Scenario",
+    jitter: float,
+    action: "Action",
+    confidence: float,
+    model: str,
+) -> "AgentState":
+    aiq = aiq_for(archetype, scenario, confidence, jitter)
+    pnl_bps = pnl_bps_for(action, archetype, scenario, jitter)
+    score = score_for(confidence, pnl_bps, aiq, archetype.tier)
+    return AgentState(
+        agent_id=agent_id,
+        archetype=archetype.name,
+        tier=archetype.tier,
+        action=action,
+        confidence=confidence,
+        pnl_bps=pnl_bps,
+        aiq=aiq,
+        score=score,
+        rationale=f"0G/{model}: {archetype.name} -> {action} (conf={confidence:.2f})",
+        inference_source="0g_compute",
+        model=model,
+    )
+
+
+def _state_from_fallback(
+    *,
+    fallback: "LocalInferenceProvider",
+    agent_id: str,
+    archetype: "AgentArchetype",
+    scenario: "Scenario",
+    jitter: float,
+    error: str,
+) -> "AgentState":
+    state = fallback.evaluate_agent(
+        agent_id=agent_id, archetype=archetype, scenario=scenario, jitter=jitter
+    )
+    return AgentState(
+        agent_id=state.agent_id,
+        archetype=state.archetype,
+        tier=state.tier,
+        action=state.action,
+        confidence=state.confidence,
+        pnl_bps=state.pnl_bps,
+        aiq=state.aiq,
+        score=state.score,
+        rationale=f"0G fallback: {error}; {state.rationale}",
+        inference_source="local_fallback",
+        model="",
+    )
+
+
+def _run_coroutine_blocking(coro: Awaitable[_T]) -> _T:
+    """Drive a coroutine to completion from a sync caller, even when an event
+    loop is already running on the current thread.
+
+    `asyncio.run()` raises if invoked from inside a running loop (e.g. the
+    FastAPI request handlers that drive `engine.inject_scenario`). To stay
+    correct in both contexts, we detect a running loop and spin up a single
+    helper thread with its own loop to drive the coroutine. When no loop is
+    running we use `asyncio.run()` directly so callers in pure-sync contexts
+    (tests, CLI smokes) keep their existing semantics.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result_box: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            result_box["value"] = asyncio.run(coro)
+        except BaseException as exc:  # noqa: BLE001 - re-raised in caller thread
+            result_box["error"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if "error" in result_box:
+        raise result_box["error"]
+    return cast(_T, result_box["value"])
+
+
 class ZeroGComputeInferenceProvider:
     def __init__(
         self,
@@ -659,48 +771,128 @@ class ZeroGComputeInferenceProvider:
                 break
             resp.raise_for_status()
             raw = _parse_model_json(resp.json()["choices"][0]["message"]["content"])
-            action_str = str(raw["action"]).lower()
-            if action_str not in {"buy", "sell", "hold"}:
-                raise ValueError(f"unexpected action: {action_str}")
-            action = cast("Action", action_str)
-            confidence = float(raw["confidence"])
-            confidence = max(0.0, min(1.0, confidence))
+            action, confidence = _action_from_raw(raw)
             self._last_error = None
         except Exception as exc:
             self._last_latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
             self._last_error = _safe_error(exc, self._token)
-            state = self._fallback.evaluate_agent(
-                agent_id=agent_id, archetype=archetype, scenario=scenario, jitter=jitter
-            )
-            return AgentState(
-                agent_id=state.agent_id,
-                archetype=state.archetype,
-                tier=state.tier,
-                action=state.action,
-                confidence=state.confidence,
-                pnl_bps=state.pnl_bps,
-                aiq=state.aiq,
-                score=state.score,
-                rationale=f"0G fallback: {self._last_error}; {state.rationale}",
-                inference_source="local_fallback",
-                model="",
+            return _state_from_fallback(
+                fallback=self._fallback,
+                agent_id=agent_id,
+                archetype=archetype,
+                scenario=scenario,
+                jitter=jitter,
+                error=self._last_error,
             )
 
         self._last_latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
-        aiq = aiq_for(archetype, scenario, confidence, jitter)
-        pnl_bps = pnl_bps_for(action, archetype, scenario, jitter)
-        score = score_for(confidence, pnl_bps, aiq, archetype.tier)
-        return AgentState(
+        return _state_from_inference(
             agent_id=agent_id,
-            archetype=archetype.name,
-            tier=archetype.tier,
+            archetype=archetype,
+            scenario=scenario,
+            jitter=jitter,
             action=action,
             confidence=confidence,
-            pnl_bps=pnl_bps,
-            aiq=aiq,
-            score=score,
-            rationale=f"0G/{self._model}: {archetype.name} -> {action} (conf={confidence:.2f})",
-            inference_source="0g_compute",
+            model=self._model,
+        )
+
+    async def evaluate_agents_batch(
+        self,
+        *,
+        requests: list[tuple[str, "AgentArchetype", "Scenario", float]],
+        client: httpx.AsyncClient | None = None,
+    ) -> list["AgentState"]:
+        """Fire one HTTP call per agent concurrently against 0G Compute.
+
+        The 0G Compute proxy has no native batch endpoint, so we approximate
+        a batch by reusing a single `httpx.AsyncClient` connection pool across
+        an `asyncio.gather()` fan-out. Per-request retry on 429 and per-request
+        fallback to the local heuristic match the sync `evaluate_agent()` path
+        exactly, so a partial failure inside a batch only degrades that single
+        agent.
+
+        Pass `client` to reuse an outer connection pool (useful when chaining
+        multiple batches in one logical call); otherwise a short-lived client
+        is created for the duration of the batch.
+        """
+        if not requests:
+            return []
+
+        if client is None:
+            async with httpx.AsyncClient(timeout=self._timeout) as owned:
+                return await self._dispatch_batch(owned, requests)
+        return await self._dispatch_batch(client, requests)
+
+    async def _dispatch_batch(
+        self,
+        client: httpx.AsyncClient,
+        requests: list[tuple[str, "AgentArchetype", "Scenario", float]],
+    ) -> list["AgentState"]:
+        tasks = [
+            self._single_async_eval(client, agent_id, archetype, scenario, jitter)
+            for agent_id, archetype, scenario, jitter in requests
+        ]
+        return list(await asyncio.gather(*tasks))
+
+    async def _single_async_eval(
+        self,
+        client: httpx.AsyncClient,
+        agent_id: str,
+        archetype: "AgentArchetype",
+        scenario: "Scenario",
+        jitter: float,
+    ) -> "AgentState":
+        prompt = _build_inference_prompt(archetype, scenario)
+        started = time.perf_counter()
+        last_exc: Exception | None = None
+        try:
+            resp: httpx.Response | None = None
+            for attempt in range(4):
+                resp = await client.post(
+                    f"{self._base}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._token}"},
+                    json={
+                        "model": self._model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 64,
+                    },
+                )
+                if getattr(resp, "status_code", None) == 429:
+                    await asyncio.sleep(2.0 * (attempt + 1))
+                    continue
+                break
+            assert resp is not None
+            resp.raise_for_status()
+            raw = _parse_model_json(resp.json()["choices"][0]["message"]["content"])
+            action, confidence = _action_from_raw(raw)
+        except Exception as exc:
+            last_exc = exc
+
+        latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
+        if last_exc is not None:
+            error = _safe_error(last_exc, self._token)
+            # Reflect the most recent batch error on the provider so callers
+            # observing `last_error`/`last_latency_ms` see consistent state.
+            self._last_error = error
+            self._last_latency_ms = latency_ms
+            return _state_from_fallback(
+                fallback=self._fallback,
+                agent_id=agent_id,
+                archetype=archetype,
+                scenario=scenario,
+                jitter=jitter,
+                error=error,
+            )
+
+        self._last_error = None
+        self._last_latency_ms = latency_ms
+        return _state_from_inference(
+            agent_id=agent_id,
+            archetype=archetype,
+            scenario=scenario,
+            jitter=jitter,
+            action=action,
+            confidence=confidence,
             model=self._model,
         )
 
@@ -714,6 +906,9 @@ class HybridInferenceProvider:
         self._local = LocalInferenceProvider()
         self._real = real
         self._top_n = max(0, top_n)
+        # Retained for API/config compatibility. The refine path now fans out
+        # via async batching (`BATCH_SIZE`) on a shared httpx.AsyncClient
+        # rather than a thread pool, so this value is advisory.
         self._max_workers = max(1, max_workers)
         self._last_metrics = HybridInferenceMetrics(
             mode="0g_compute",
@@ -752,26 +947,32 @@ class HybridInferenceProvider:
         top = sorted_states[: self._top_n]
         rest = sorted_states[self._top_n :]
 
-        def refine_one(state: "AgentState") -> tuple["AgentState", float]:
-            archetype = archetypes[state.agent_id]
-            started = time.perf_counter()
-            refined = self._real.evaluate_agent(
-                agent_id=state.agent_id,
-                archetype=archetype,
-                scenario=scenario,
-                jitter=0.0,
+        if not top:
+            self._last_metrics = HybridInferenceMetrics(
+                mode="0g_compute",
+                model=self._real.model,
+                top_n=self._top_n,
+                attempted_real_count=0,
+                successful_real_count=0,
+                fallback_count=0,
+                avg_latency_ms=None,
+                last_error=None,
             )
-            latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
-            return refined, latency_ms
+            return rest
 
-        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            results = list(executor.map(refine_one, top))
+        eligible = [state for state in top if state.agent_id in archetypes]
+        skipped = [state for state in top if state.agent_id not in archetypes]
+        requests = [
+            (state.agent_id, archetypes[state.agent_id], scenario, 0.0) for state in eligible
+        ]
 
-        refined = [state for state, _latency in results]
-        latencies = [latency for _state, latency in results]
+        refined, per_agent_latency_ms = _run_coroutine_blocking(
+            self._refine_in_batches(requests)
+        )
+
         successful = sum(1 for state in refined if state.inference_source == "0g_compute")
         fallback = len(refined) - successful
-        last_error = None
+        last_error: str | None = None
         for state in refined:
             if state.inference_source == "local_fallback" and state.rationale.startswith("0G fallback: "):
                 last_error = state.rationale.removeprefix("0G fallback: ").split("; ", 1)[0]
@@ -782,7 +983,43 @@ class HybridInferenceProvider:
             attempted_real_count=len(refined),
             successful_real_count=successful,
             fallback_count=fallback,
-            avg_latency_ms=round(sum(latencies) / len(latencies), 3) if latencies else None,
+            avg_latency_ms=per_agent_latency_ms,
             last_error=last_error,
         )
-        return refined + rest
+        return refined + skipped + rest
+
+    async def _refine_in_batches(
+        self,
+        requests: list[tuple[str, "AgentArchetype", "Scenario", float]],
+    ) -> tuple[list["AgentState"], float | None]:
+        """Drive `evaluate_agents_batch` in windows of `BATCH_SIZE`, sharing
+        a single `httpx.AsyncClient` across all windows so connection setup
+        is amortized.
+
+        Returns the refined states (in input order) and the average per-agent
+        wall-clock latency, computed by dividing each batch's wall-clock time
+        by the number of agents in that batch — which approximates the
+        amortized cost the caller saw under concurrent dispatch.
+        """
+        if not requests:
+            return [], None
+
+        refined: list["AgentState"] = []
+        per_agent_samples: list[float] = []
+        async with httpx.AsyncClient(timeout=self._real._timeout) as client:
+            for offset in range(0, len(requests), BATCH_SIZE):
+                window = requests[offset : offset + BATCH_SIZE]
+                started = time.perf_counter()
+                chunk = await self._real.evaluate_agents_batch(
+                    requests=window, client=client
+                )
+                wall_ms = (time.perf_counter() - started) * 1000.0
+                refined.extend(chunk)
+                if window:
+                    per_agent_samples.extend([wall_ms / len(window)] * len(window))
+        avg = (
+            round(sum(per_agent_samples) / len(per_agent_samples), 3)
+            if per_agent_samples
+            else None
+        )
+        return refined, avg

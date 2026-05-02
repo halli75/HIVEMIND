@@ -1,7 +1,7 @@
 import json
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -175,7 +175,12 @@ def test_default_app_reports_live_0g_run_mode(monkeypatch, tmp_path: Path) -> No
     monkeypatch.setenv("ZERO_G_COMPUTE_BEARER_TOKEN", "tok-test")
     monkeypatch.setenv("ZERO_G_COMPUTE_TOP_N", "2")
 
-    with patch("httpx.post", return_value=mock_resp):
+    # The HybridInferenceProvider refine path now batches over
+    # `httpx.AsyncClient.post`; the sync `httpx.post` patch alone no longer
+    # intercepts those calls, so we patch both for backward coverage.
+    with patch("httpx.post", return_value=mock_resp), patch(
+        "httpx.AsyncClient.post", AsyncMock(return_value=mock_resp)
+    ):
         client = TestClient(
             create_app(
                 seed_snapshot_dir=tmp_path / "missing-seeds",
@@ -219,7 +224,9 @@ def test_default_app_composes_local_axl_and_live_0g_run_mode(tmp_path: Path, mon
     monkeypatch.setenv("ZERO_G_COMPUTE_TOP_N", "1")
     monkeypatch.delenv("AXL_NODE_URLS", raising=False)
 
-    with patch("httpx.post", return_value=mock_resp):
+    with patch("httpx.post", return_value=mock_resp), patch(
+        "httpx.AsyncClient.post", AsyncMock(return_value=mock_resp)
+    ):
         client = TestClient(
             create_app(
                 seed_snapshot_dir=tmp_path / "missing-seeds",
@@ -249,7 +256,9 @@ def test_legacy_mock_inference_flag_still_enables_live_0g(monkeypatch, tmp_path:
     monkeypatch.setenv("ZERO_G_COMPUTE_BEARER_TOKEN", "tok-test")
     monkeypatch.setenv("ZERO_G_COMPUTE_TOP_N", "1")
 
-    with patch("httpx.post", return_value=mock_resp):
+    with patch("httpx.post", return_value=mock_resp), patch(
+        "httpx.AsyncClient.post", AsyncMock(return_value=mock_resp)
+    ):
         client = TestClient(
             create_app(
                 seed_snapshot_dir=tmp_path / "missing-seeds",

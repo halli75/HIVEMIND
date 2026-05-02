@@ -79,6 +79,34 @@ hivemind-sdk's architecture is directly inspired by OpenClaw's agent framework. 
 | Session model — persistent context per user/channel | Per-agent KV Store (live state) + Log Store (history) |
 | Extensions — modular add-ons to core gateway behavior | ScenarioInjector + ScoringEngine — modular components extending SwarmEngine |
 
+### Batch Inference
+
+The 0G Compute proxy has no native batch endpoint, so HIVEMIND approximates a batch by fanning the
+Tier 1 refine pass out across an `asyncio.gather()` window with a shared `httpx.AsyncClient`
+connection pool. Default window is `BATCH_SIZE = 5` agents per round trip, sized to clear the upstream
+rate limiter without head-of-line blocking. Per-request retry on HTTP 429 and per-request fallback to
+the local heuristic are preserved, so a partial failure inside a batch only degrades that single
+agent — the rest of the window still returns real 0G results.
+
+The same dispatcher is reused inside FastAPI request handlers (which run in an asyncio loop) and from
+sync callers (CLI smokes, tests) by detecting a running event loop and trampolining onto a helper
+thread when one is present. `refine_top_n` is the single entry point for both paths.
+
+Indicative wall-clock improvement against the 0G Compute proxy at ~350 ms per call:
+
+| Batch size | Sequential | Concurrent | Speedup |
+|---|---|---|---|
+| 5 agents  | ~1,750 ms (5 x 350 ms) | ~370 ms | ~4.7x |
+| 10 agents | ~3,500 ms              | ~740 ms | ~4.7x |
+
+Source: `ZeroGComputeInferenceProvider.evaluate_agents_batch` and
+`HybridInferenceProvider._refine_in_batches` in
+[`packages/hivemind-sdk/src/hivemind_sdk/providers.py`](packages/hivemind-sdk/src/hivemind_sdk/providers.py).
+Test coverage: `test_evaluate_agents_batch_returns_concurrent_results`,
+`test_refine_top_n_batches_in_windows_of_five`, and
+`test_refine_top_n_works_inside_running_event_loop` in
+[`packages/hivemind-sdk/tests/test_zero_g_provider.py`](packages/hivemind-sdk/tests/test_zero_g_provider.py).
+
 ## AXL Integration
 
 HIVEMIND uses Gensyn AXL as its cross-process P2P messaging layer. Two to five real AXL node
