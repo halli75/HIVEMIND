@@ -195,6 +195,9 @@ class LeaderboardEntry:
     confidence: float
     pnl_bps: float
     aiq: float
+    rationale: str = ""
+    inference_source: str = "local"
+    model: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

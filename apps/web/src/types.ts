@@ -26,6 +26,8 @@ export type SwarmAgent = {
   pnl_bps?: number;
   aiq?: number;
   rationale?: string;
+  inferenceSource?: string;
+  model?: string;
 };
 
 export type AxlEdgeMessage = {

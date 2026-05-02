@@ -100,6 +100,13 @@ const createAgents = (count: number): SwarmAgent[] =>
       pnl_bps: 5 + ((index * 13) % 80) - 20,
       aiq: 0.3 + ((index * 7) % 60) / 100,
       rationale,
+      inferenceSource:
+        tierForIndex(index) === "T1"
+          ? "0g_compute"
+          : tierForIndex(index) === "T2"
+            ? "local"
+            : "heuristic",
+      model: tierForIndex(index) === "T1" ? "qwen/qwen-2.5-7b-instruct" : "",
     };
   });
 

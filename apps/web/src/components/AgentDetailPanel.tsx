@@ -29,6 +29,58 @@ const TIER_DESCRIPTIONS: Record<string, string> = {
   T3: "Heuristic · zero inference cost",
 };
 
+type InferenceBadge = {
+  label: string;
+  color: string;
+  glow: string;
+  detail: string;
+};
+
+const inferenceBadgeFor = (
+  source: string | undefined,
+  model: string | undefined,
+): InferenceBadge => {
+  const normalized = (source ?? "").toLowerCase();
+  if (normalized.startsWith("0g")) {
+    return {
+      label: "0G LIVE",
+      color: "#00ffaa",
+      glow: "#00ffaa",
+      detail: model ? model : "0g compute",
+    };
+  }
+  if (normalized.includes("fallback")) {
+    return {
+      label: "FALLBACK",
+      color: "#ff7700",
+      glow: "#ff7700",
+      detail: model ? `${model} (degraded)` : "0g unreachable",
+    };
+  }
+  if (normalized === "local" || normalized === "local_model") {
+    return {
+      label: "LOCAL",
+      color: "#00bfff",
+      glow: "#00bfff",
+      detail: model || "local model",
+    };
+  }
+  if (normalized === "heuristic" || normalized === "" || normalized === "rule") {
+    return {
+      label: "HEURISTIC",
+      color: "#7a9a8a",
+      glow: "#5a7a6a",
+      detail: "deterministic rule",
+    };
+  }
+  return {
+    label: normalized.toUpperCase(),
+    color: "#cc77ff",
+    glow: "#cc77ff",
+    detail: model || normalized,
+  };
+};
+
 function StatCell({
   label,
   value,
@@ -88,6 +140,7 @@ export function AgentDetailPanel({
     agent?.rationale ??
     "No rationale available — agent has not surfaced an explanation for its current action.";
   const bio = ARCHETYPE_BIOS[archetypeKey] ?? "Adaptive on-chain agent.";
+  const inferenceBadge = inferenceBadgeFor(agent?.inferenceSource, agent?.model);
 
   return (
     <aside
@@ -165,13 +218,43 @@ export function AgentDetailPanel({
       </section>
 
       <section className="adp-section">
-        <p className="adp-section-eyebrow">RATIONALE</p>
-        <blockquote className="adp-rationale">
-          <span className="adp-rationale-glyph" aria-hidden>
+        <div className="adp-rationale-head">
+          <p className="adp-section-eyebrow">RATIONALE</p>
+          <span
+            className="adp-inference-badge"
+            style={{
+              borderColor: inferenceBadge.color,
+              color: inferenceBadge.color,
+              boxShadow: `0 0 10px ${inferenceBadge.glow}55, inset 0 0 8px ${inferenceBadge.glow}22`,
+            }}
+            title={inferenceBadge.detail}
+          >
+            <span
+              className="adp-inference-dot"
+              style={{ background: inferenceBadge.color, boxShadow: `0 0 6px ${inferenceBadge.color}` }}
+            />
+            {inferenceBadge.label}
+          </span>
+        </div>
+        <blockquote
+          className="adp-rationale"
+          style={{ borderLeftColor: inferenceBadge.color }}
+        >
+          <span
+            className="adp-rationale-glyph"
+            aria-hidden
+            style={{ color: inferenceBadge.color, textShadow: `0 0 8px ${inferenceBadge.color}` }}
+          >
             ❯
           </span>
           <p>{rationale}</p>
         </blockquote>
+        {inferenceBadge.detail ? (
+          <p className="adp-inference-detail">
+            <span>via</span>
+            <code>{inferenceBadge.detail}</code>
+          </p>
+        ) : null}
       </section>
 
       <section className="adp-section">
