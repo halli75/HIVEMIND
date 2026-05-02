@@ -56,6 +56,65 @@ class GovernanceSignalPayload(TypedDict):
     rationale: str
 
 
+class TradeIntentPayload(TypedDict):
+    agent_id: str
+    archetype: str
+    scenario_id: str
+    action: str
+    confidence: float
+    size_usd_est: float
+
+
+class MarketSignalPayload(TypedDict, total=False):
+    """Coordinator-broadcast market view consumed by Degen / urgency boost.
+
+    `total=False` because the field set varies between the runner smoke (which
+    emits `signal_strength` / `sequence` / `scenario_id`) and the failure
+    handler (which emits `signal` / `node_id` / `reason` to record dead nodes).
+    """
+    agent_id: str
+    target_agent_id: str
+    signal_type: str
+    asset: str
+    confidence: float
+    signal_strength: float
+    timestamp: str
+    sequence: int
+    scenario_id: str
+    signal: str
+    node_id: str
+    reason: str
+
+
+class InferenceResultPayload(TypedDict):
+    agent_id: str
+    scenario_id: str
+    action: str
+    confidence: float
+    score: float
+    aiq: float
+
+
+class ScenarioShockPayload(TypedDict, total=False):
+    """SCENARIO_SHOCK is broadcast by both the local AXL coordinator (smoke)
+    and `LocalAxlMessageBus.broadcast_scenario` (engine). The two emitters
+    use overlapping but not identical field sets, so the typed view is a
+    superset and `total=False`.
+    """
+    scenario_id: str
+    label: str
+    shock_type: str
+    magnitude: float
+    asset: str
+    injected_at: str
+    sequence: int
+    signal_strength: float
+    volatility: float
+    liquidity_delta: float
+    sentiment: float
+    gas_pressure: float
+
+
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 

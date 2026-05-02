@@ -1,7 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from hivemind_sdk import (
     AxlMessage,
@@ -183,10 +183,10 @@ def test_engine_records_zero_rate_limited_when_bucket_has_capacity() -> None:
 
 
 def test_engine_reports_live_0g_mode_and_metrics() -> None:
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {
+    async_resp = MagicMock()
+    async_resp.status_code = 200
+    async_resp.raise_for_status = MagicMock()
+    async_resp.json.return_value = {
         "choices": [{"message": {"content": json.dumps({"action": "buy", "confidence": 0.77})}}]
     }
     inference = HybridInferenceProvider(
@@ -197,7 +197,10 @@ def test_engine_reports_live_0g_mode_and_metrics() -> None:
         ),
         top_n=2,
     )
-    with patch("httpx.post", return_value=mock_resp):
+    # `refine_top_n` now batches via `httpx.AsyncClient.post`; the sync
+    # `httpx.post` patch from the previous implementation is no longer hit.
+    async_post = AsyncMock(return_value=async_resp)
+    with patch("httpx.AsyncClient.post", async_post):
         engine = SwarmEngine(agent_count=3, seed="live-0g-engine", inference_provider=inference)
         snapshot = engine.inject_scenario(
             Scenario(

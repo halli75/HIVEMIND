@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence, Union
+from typing import Any, Literal, Sequence, Union
 
 from .archetypes import DEFAULT_ARCHETYPES
 from .axl_pool import AXLPoolManager
@@ -222,6 +222,27 @@ class SwarmEngine:
         self._axl_agent_id = axl_agent_id
         self._axl_pool: AXLPoolManager | None = None
         self._axl_urgency_boost: dict[str, float] = {}
+        # Last observed pool TVL (USD) from a POOL_STATE oracle frame.
+        # Compared against the next frame to drive Arbitrageur / LP Provider
+        # urgency on TVL deltas. `None` means we have not seen a frame yet
+        # (first frame establishes the baseline without firing effects).
+        self._last_pool_tvl_usd: float | None = None
+        # Pending coalition acceptances keyed by target agent_id. Drained
+        # by `_axl_pool_drain` and consumed by the next tick's tier-2/3
+        # evaluators via `_coalition_action_override`. Entry shape:
+        #   {"action": str, "objective": str, "expires_at_tick": int,
+        #    "proposer_id": str, "coalition_id": str}
+        self._coalition_overrides: dict[str, dict[str, Any]] = {}
+        # Per-proposal vote tally from GOVERNANCE_SIGNAL drain. Shape:
+        #   {proposal_id: {"for": power, "against": power,
+        #                   "voters": set[agent_id], "outcome_logged": bool}}
+        # `voters` dedupes double-counting if the same agent's vote appears
+        # twice in the inbox; `outcome_logged` ensures the quorum log line
+        # fires once per proposal.
+        self._governance_votes: dict[str, dict[str, Any]] = {}
+        # One-shot governance log lines surfaced into the next snapshot's
+        # `event_log`. Drained on read by `_drain_governance_events`.
+        self._governance_events: list[str] = []
         self._token_bucket = token_bucket or TokenBucket()
         self._last_rate_limited_count: int = 0
         self._last_rate_limited_agents: tuple[str, ...] = ()
@@ -586,15 +607,32 @@ class SwarmEngine:
         market_state = _market_state_from_scenario(scenario)
         memory = _memory_from_scenario(scenario, agent.agent_id, jitter)
         decision = agent.archetype.heuristic(market_state, memory)
+        coalition_action = self._coalition_action_override(agent.agent_id)
+        if coalition_action and decision.get("action") != coalition_action:
+            decision = {
+                **decision,
+                "action": coalition_action,
+                "rationale": (
+                    f"{decision.get('rationale', agent.archetype.name)} "
+                    f"[coalition override -> {coalition_action}]"
+                ),
+            }
         return _agent_state_from_decision(agent, scenario, decision, jitter)
 
     def _tier3_evaluate(self, agent: _AgentIdentity, scenario: Scenario) -> AgentState:
         jitter = self._jitter(agent.agent_id, scenario.scenario_id)
         last_action = self._last_action.get(agent.agent_id, "hold")
+        coalition_action = self._coalition_action_override(agent.agent_id)
+        action = coalition_action or last_action
+        rationale = (
+            f"{agent.archetype.name}: tier-3 coalition follow-through ({action})"
+            if coalition_action
+            else f"{agent.archetype.name}: tier-3 background carry of last action"
+        )
         decision = {
-            "action": last_action,
-            "confidence": 0.3,
-            "rationale": f"{agent.archetype.name}: tier-3 background carry of last action",
+            "action": action,
+            "confidence": 0.4 if coalition_action else 0.3,
+            "rationale": rationale,
         }
         return _agent_state_from_decision(agent, scenario, decision, jitter)
 
@@ -686,6 +724,7 @@ class SwarmEngine:
             f"scenario:{active_scenario.scenario_id}",
             f"tier1:{len(tier1)} tier2:{len(tier2)} tier3:{len(tier3)} rate_limited:{self._last_rate_limited_count}",
             f"axl:{integrations.gensyn_axl['mode']}:messages:{integrations.gensyn_axl['messages']}",
+            *self._drain_governance_events(),
         )
 
         snapshot = SwarmSnapshot(
@@ -737,22 +776,191 @@ class SwarmEngine:
             return
         messages = await pool.receive(timeout=0.0)
         for message in messages:
-            if message.type != "MARKET_SIGNAL":
-                continue
-            target = (
-                message.payload.get("target_agent_id")
-                or message.payload.get("agent_id")
+            if message.type == "MARKET_SIGNAL":
+                self._handle_market_signal(message.payload)
+            elif message.type == "POOL_STATE":
+                self._handle_pool_state(message.payload)
+            elif message.type == "COALITION_INVITE":
+                self._handle_coalition_invite(message.payload)
+            elif message.type == "GOVERNANCE_SIGNAL":
+                self._handle_governance_signal(message.payload)
+
+    def _handle_market_signal(self, payload: dict[str, Any]) -> None:
+        target = payload.get("target_agent_id") or payload.get("agent_id")
+        strength = float(payload.get("signal_strength", 1.0) or 1.0)
+        if target:
+            self._axl_urgency_boost[str(target)] = (
+                self._axl_urgency_boost.get(str(target), 0.0) + strength
             )
-            strength = float(message.payload.get("signal_strength", 1.0) or 1.0)
-            if target:
-                self._axl_urgency_boost[str(target)] = (
-                    self._axl_urgency_boost.get(str(target), 0.0) + strength
+        else:
+            for agent in self._agents:
+                self._axl_urgency_boost[agent.agent_id] = (
+                    self._axl_urgency_boost.get(agent.agent_id, 0.0) + strength * 0.1
                 )
-            else:
-                for agent in self._agents:
-                    self._axl_urgency_boost[agent.agent_id] = (
-                        self._axl_urgency_boost.get(agent.agent_id, 0.0) + strength * 0.1
-                    )
+
+    def _handle_pool_state(self, payload: dict[str, Any]) -> None:
+        """POOL_STATE frame: bias Arbitrageur / LP Provider urgency on TVL drift.
+
+        - First frame seen establishes the baseline TVL with no side effects.
+        - Subsequent frames compute a percentage delta vs the previous frame:
+            * TVL drop >= 2%   -> urgency boost on Arbitrageur and LP Provider
+                                  agents proportional to the drop magnitude.
+                                  This pushes them up the Tier 1 admission
+                                  ranking the next tick so they react first.
+            * TVL rise >= 1%   -> small confidence-style nudge for LP Provider
+                                  agents only (re-encoded as urgency since the
+                                  engine has no per-agent confidence dial; the
+                                  effect is "look at me again sooner" which is
+                                  the right Tier 1 admission semantic anyway).
+        """
+        try:
+            tvl_usd = float(payload.get("tvl_usd", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return
+        if tvl_usd <= 0:
+            return
+        previous = self._last_pool_tvl_usd
+        self._last_pool_tvl_usd = tvl_usd
+        if previous is None or previous <= 0:
+            return
+        delta_pct = (tvl_usd - previous) / previous
+        if abs(delta_pct) < 0.01:
+            return
+        for agent in self._agents:
+            archetype_name = agent.archetype.name
+            if archetype_name not in {"arbitrageur", "lp_provider"}:
+                continue
+            if delta_pct <= -0.02:
+                boost = abs(delta_pct) * 2.0
+                self._axl_urgency_boost[agent.agent_id] = (
+                    self._axl_urgency_boost.get(agent.agent_id, 0.0) + boost
+                )
+            elif delta_pct >= 0.01 and archetype_name == "lp_provider":
+                self._axl_urgency_boost[agent.agent_id] = (
+                    self._axl_urgency_boost.get(agent.agent_id, 0.0) + delta_pct * 1.5
+                )
+
+    def _handle_coalition_invite(self, payload: dict[str, Any]) -> None:
+        """COALITION_INVITE: stage an action override on the targeted agent.
+
+        Effects fire on the *next* tick's Tier 2/3 evaluation (see
+        `_coalition_action_override`). Tier 1 Inference still runs the model
+        for admitted agents — the override only kicks in for tiers that would
+        otherwise carry the previous action without coordination context.
+
+        Validation:
+        - The proposer must exist in the current swarm and share the target's
+          archetype (whale or lp_provider invites only their own kind).
+        - `expires_at_tick` must be in the future relative to the current
+          `_tick_index`, otherwise the invite is dropped silently.
+        """
+        target_id = str(payload.get("target_agent_id") or "")
+        proposer_id = str(payload.get("proposer_agent_id") or "")
+        objective = str(payload.get("objective") or "")
+        try:
+            expires_at_tick = int(payload.get("expires_at_tick") or payload.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            return
+        if not target_id or not proposer_id or not objective:
+            return
+        if expires_at_tick <= self._tick_index:
+            return
+        agents_by_id = {agent.agent_id: agent for agent in self._agents}
+        target = agents_by_id.get(target_id)
+        proposer = agents_by_id.get(proposer_id)
+        if target is None or proposer is None:
+            return
+        if target.archetype.name != proposer.archetype.name:
+            return
+        if objective == "joint_lp":
+            action = "provide_liquidity"
+        elif objective == "coordinated_buy":
+            action = "buy"
+        else:
+            return
+        self._coalition_overrides[target_id] = {
+            "action": action,
+            "objective": objective,
+            "expires_at_tick": expires_at_tick,
+            "proposer_id": proposer_id,
+            "coalition_id": str(payload.get("coalition_id") or ""),
+        }
+        # Coordinated agents should also bubble back up to Tier 1 admission
+        # so they have a chance to confirm with real inference next tick.
+        self._axl_urgency_boost[target_id] = (
+            self._axl_urgency_boost.get(target_id, 0.0) + 0.5
+        )
+
+    def _coalition_action_override(self, agent_id: str) -> str | None:
+        """Return the staged coalition action for `agent_id`, or `None`.
+
+        Drops the entry once consumed; expired entries are also evicted on
+        read to keep the dict bounded.
+        """
+        entry = self._coalition_overrides.get(agent_id)
+        if entry is None:
+            return None
+        if int(entry.get("expires_at_tick", 0)) <= self._tick_index:
+            self._coalition_overrides.pop(agent_id, None)
+            return None
+        action = str(entry.get("action") or "")
+        if not action:
+            return None
+        # One-shot: an invite biases one tick of follow-through, then clears.
+        self._coalition_overrides.pop(agent_id, None)
+        return action
+
+    def _handle_governance_signal(self, payload: dict[str, Any]) -> None:
+        """GOVERNANCE_SIGNAL: tally weighted votes per proposal.
+
+        On reaching >=50% of the swarm's `governance_voter` agents, log a
+        one-line outcome to `_governance_events` (which the next tick's
+        `event_log` will surface) and mark the proposal as logged so we
+        never double-emit if more votes arrive late.
+        """
+        proposal_id = str(payload.get("proposal_id") or "")
+        vote = str(payload.get("vote") or "abstain")
+        voter_id = str(payload.get("voter_agent_id") or payload.get("agent_id") or "")
+        try:
+            power = float(payload.get("voting_power", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            power = 0.0
+        if not proposal_id or vote not in {"for", "against"}:
+            return
+        bucket = self._governance_votes.setdefault(
+            proposal_id,
+            {"for": 0.0, "against": 0.0, "voters": set(), "outcome_logged": False},
+        )
+        voters: set[str] = bucket["voters"]  # type: ignore[assignment]
+        if voter_id and voter_id in voters:
+            return
+        if voter_id:
+            voters.add(voter_id)
+        bucket[vote] = float(bucket.get(vote, 0.0)) + power
+        if bool(bucket.get("outcome_logged")):
+            return
+        eligible_voters = sum(
+            1 for agent in self._agents if agent.archetype.name == "governance_voter"
+        )
+        if eligible_voters <= 0:
+            return
+        if len(voters) / eligible_voters < 0.5:
+            return
+        for_total = float(bucket.get("for", 0.0))
+        against_total = float(bucket.get("against", 0.0))
+        winner = "for" if for_total >= against_total else "against"
+        bucket["outcome_logged"] = True
+        self._governance_events.append(
+            f"governance:{proposal_id}:{winner}"
+            f" (for={for_total:.2f},against={against_total:.2f},voters={len(voters)}/{eligible_voters})"
+        )
+
+    def _drain_governance_events(self) -> tuple[str, ...]:
+        if not self._governance_events:
+            return ()
+        events = tuple(self._governance_events)
+        self._governance_events.clear()
+        return events
 
     async def _axl_pool_publish_tier1(
         self,
@@ -763,6 +971,7 @@ class SwarmEngine:
         pool = await self._axl_pool_ensure()
         if pool is None:
             return
+        agents_by_id = {agent.agent_id: agent for agent in self._agents}
         for agent, state in zip(tier1, tier1_results):
             try:
                 await pool.broadcast(
@@ -787,8 +996,109 @@ class SwarmEngine:
                         "aiq": state.aiq,
                     },
                 )
+                await self._maybe_publish_coalition_invite(
+                    pool=pool,
+                    agent=agent,
+                    state=state,
+                    scenario=scenario,
+                    agents_by_id=agents_by_id,
+                )
+                await self._maybe_publish_governance_signal(
+                    pool=pool,
+                    agent=agent,
+                    state=state,
+                    scenario=scenario,
+                )
             except (ConnectionError, OSError):
                 continue
+
+    async def _maybe_publish_coalition_invite(
+        self,
+        *,
+        pool: "AXLPoolManager",
+        agent: "_AgentIdentity",
+        state: AgentState,
+        scenario: Scenario,
+        agents_by_id: dict[str, "_AgentIdentity"],
+    ) -> None:
+        """Whales and LP Providers with high-confidence buy/LP intents
+        propose a coordinated position to the strongest same-archetype peer.
+
+        Direct send (`pool.send`) — matches the COALITION_INVITE schema's
+        Agent → Agent direction.
+        """
+        archetype_name = agent.archetype.name
+        if archetype_name not in {"whale", "lp_provider"}:
+            return
+        if state.confidence < 0.75:
+            return
+        if state.action == "buy":
+            objective = "coordinated_buy"
+        elif state.action == "provide_liquidity":
+            objective = "joint_lp"
+        else:
+            return
+        peers = [
+            other
+            for other in agents_by_id.values()
+            if other.archetype.name == archetype_name and other.agent_id != agent.agent_id
+        ]
+        if not peers:
+            return
+        # Deterministic peer selection: lexicographic agent_id ordering means
+        # tests/replays produce identical invites. (No mutable score state on
+        # _AgentIdentity, so "top by score" would require carrying tier-1
+        # results across the loop — the deterministic pick is simpler and
+        # equally illustrative.)
+        target = sorted(peers, key=lambda other: other.agent_id)[0]
+        coalition_id = (
+            f"coal-{scenario.scenario_id}-{agent.agent_id}-t{self._tick_index:04d}"
+        )
+        expires_at_tick = self._tick_index + 5
+        payload = {
+            "coalition_id": coalition_id,
+            "proposer_agent_id": agent.agent_id,
+            "target_agent_id": target.agent_id,
+            "objective": objective,
+            "expires_at_tick": expires_at_tick,
+            "minimum_stake": round(state.aiq * state.score, 4),
+            "proposed_at_tick": self._tick_index,
+            "scenario_id": scenario.scenario_id,
+        }
+        try:
+            await pool.send(target.agent_id, "COALITION_INVITE", payload)
+        except (ConnectionError, OSError):
+            return
+
+    async def _maybe_publish_governance_signal(
+        self,
+        *,
+        pool: "AXLPoolManager",
+        agent: "_AgentIdentity",
+        state: AgentState,
+        scenario: Scenario,
+    ) -> None:
+        """`governance_voter` agents emit a stake-weighted vote whenever
+        their Tier 1 evaluation produced a vote action. The vote direction is
+        derived from the inference confidence; voting_power blends AIQ and
+        the swarm score so high-AIQ voters carry more weight.
+        """
+        if agent.archetype.name != "governance_voter":
+            return
+        if state.action != "vote":
+            return
+        vote: Literal["for", "against"] = "for" if state.confidence >= 0.6 else "against"
+        payload = {
+            "proposal_id": f"prop-{scenario.scenario_id}",
+            "voter_agent_id": agent.agent_id,
+            "vote": vote,
+            "voting_power": round(state.aiq * state.score, 4),
+            "rationale": state.rationale or f"{agent.archetype.name} stake-weighted vote",
+        }
+        try:
+            await pool.broadcast("GOVERNANCE_SIGNAL", payload)
+        except (ConnectionError, OSError):
+            return
 
     async def aclose(self) -> None:
         if self._axl_pool is not None:

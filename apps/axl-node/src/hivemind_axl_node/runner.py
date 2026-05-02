@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import subprocess
 import sys
@@ -11,11 +12,89 @@ from pathlib import Path
 from typing import Any
 
 from hivemind_sdk import AxlMessage, append_jsonl, transcript_stats
+from hivemind_sdk.axl import PoolStatePayload
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 COORDINATOR_NODE_ID = "axl-node-a"
 EVALUATOR_NODE_ID = "axl-node-b"
+
+# Sepolia WETH/USDC reference pool — used only as a stable, recognizable
+# identifier in the synthetic POOL_STATE oracle stream emitted by the local
+# coordinator. The coordinator is not connected to a real chain reader; it
+# replays a deterministic price walk so engine consumers (Arbitrageur /
+# LP Provider urgency) always have a fresh oracle frame to react to.
+_POOL_STATE_POOL_ADDRESS = "0x45dDa9cb7c25131DF268515131f647d726f50608"
+_POOL_STATE_TOKEN0_WETH = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14"
+_POOL_STATE_TOKEN1_USDC = "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+_POOL_STATE_FEE_TIER = 3000
+
+
+def _price_to_tick(price_usd: float) -> int:
+    """ETH price (USD/WETH) -> Uniswap v3 tick using the canonical 1.0001 base.
+
+    The result is rounded to the nearest int — adequate for a synthetic oracle
+    that exists only to feed downstream tick-based heuristics, not to round-trip
+    against on-chain math.
+    """
+    if price_usd <= 0:
+        return 0
+    return int(round(math.log(price_usd) / math.log(1.0001)))
+
+
+def _price_to_sqrt_x96(price_usd: float) -> str:
+    """ETH price (USD/WETH) -> sqrtPriceX96 string.
+
+    Computed as `sqrt(price) * 2**96`, returned as a base-10 string to match
+    on-chain encoding conventions and to stay JSON-serializable without
+    overflow. This is a recognizable shape rather than a calibrated value;
+    consumers that need exact pool math should call a real RPC.
+    """
+    if price_usd <= 0:
+        return "0"
+    return str(int(math.sqrt(price_usd) * (2**96)))
+
+
+def _coordinator_message_type(index: int) -> str:
+    """Deterministic 3-way rotation: SCENARIO_SHOCK, MARKET_SIGNAL, POOL_STATE.
+
+    Splitting the slot into three keeps the oracle (POOL_STATE) emitting on
+    every third tick while preserving the existing alternation between the
+    scenario controller and market-broadcast slots.
+    """
+    slot = index % 3
+    if slot == 0:
+        return "SCENARIO_SHOCK"
+    if slot == 1:
+        return "MARKET_SIGNAL"
+    return "POOL_STATE"
+
+
+def _coordinator_payload(message_type: str, index: int) -> dict[str, Any]:
+    """Build the deterministic synthetic payload for a coordinator broadcast."""
+    if message_type == "POOL_STATE":
+        # Deterministic price walk between $1,950 and $2,050 keyed off the
+        # message index so consumers see real TVL deltas without depending
+        # on an external oracle in tests / smoke runs.
+        price_usd = 2000.0 + math.sin(index * 0.4) * 50.0
+        tvl_usd = 12_500_000.0 + math.cos(index * 0.4) * 750_000.0
+        liquidity = int(max(0.0, tvl_usd) * 1e6)  # synthetic L value
+        payload: PoolStatePayload = {
+            "pool_address": _POOL_STATE_POOL_ADDRESS,
+            "token0": _POOL_STATE_TOKEN0_WETH,
+            "token1": _POOL_STATE_TOKEN1_USDC,
+            "fee_tier": _POOL_STATE_FEE_TIER,
+            "tick": _price_to_tick(price_usd),
+            "sqrt_price_x96": _price_to_sqrt_x96(price_usd),
+            "liquidity": str(liquidity),
+            "tvl_usd": round(tvl_usd, 2),
+        }
+        return dict(payload)
+    return {
+        "scenario_id": f"local-axl-smoke-{index // 3:03d}",
+        "sequence": index + 1,
+        "signal_strength": round(0.45 + (index % 7) * 0.06, 3),
+    }
 
 
 def _encode(message: AxlMessage) -> bytes:
@@ -49,16 +128,12 @@ async def run_coordinator(
         peer_node = EVALUATOR_NODE_ID
         try:
             for index in range(messages):
-                message_type = "SCENARIO_SHOCK" if index % 2 == 0 else "MARKET_SIGNAL"
+                message_type = _coordinator_message_type(index)
                 outbound = AxlMessage.create(
                     source_node=node_id,
                     target=peer_node,
                     message_type=message_type,
-                    payload={
-                        "scenario_id": f"local-axl-smoke-{index // 2:03d}",
-                        "sequence": index + 1,
-                        "signal_strength": round(0.45 + (index % 7) * 0.06, 3),
-                    },
+                    payload=_coordinator_payload(message_type, index),
                 )
                 append_jsonl(transcript, outbound)
                 sent_at = time.perf_counter()

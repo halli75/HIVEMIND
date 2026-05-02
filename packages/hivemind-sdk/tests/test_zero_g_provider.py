@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from hivemind_sdk import (
     HybridInferenceProvider,
@@ -29,6 +30,15 @@ def _make_provider() -> ZeroGComputeInferenceProvider:
         bearer_token="tok-test",
         model="qwen-test",
     )
+
+
+def _make_async_post(content: str, status_code: int = 200) -> AsyncMock:
+    """Build an `AsyncMock` suitable for patching `httpx.AsyncClient.post`."""
+    response = MagicMock()
+    response.status_code = status_code
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"choices": [{"message": {"content": content}}]}
+    return AsyncMock(return_value=response)
 
 
 def test_zero_g_provider_returns_real_inference_on_valid_response() -> None:
@@ -145,13 +155,6 @@ def test_zero_g_provider_retries_rate_limit_before_success() -> None:
 
 
 def test_hybrid_provider_refines_top_n() -> None:
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {
-        "choices": [{"message": {"content": json.dumps({"action": "sell", "confidence": 0.9})}}]
-    }
-
     real = _make_provider()
     hybrid = HybridInferenceProvider(real=real, top_n=3)
 
@@ -167,12 +170,15 @@ def test_hybrid_provider_refines_top_n() -> None:
         for i in range(1, 6)
     ]
 
-    with patch("httpx.post", return_value=mock_resp):
+    async_post = _make_async_post(json.dumps({"action": "sell", "confidence": 0.9}))
+    with patch("httpx.AsyncClient.post", async_post):
         refined = hybrid.refine_top_n(states, _SCENARIO, archetypes)
 
     assert len(refined) == 5
     real_count = sum(1 for s in refined if s.inference_source == "0g_compute")
     assert real_count == 3
+    # All 3 top-N agents fan out concurrently in a single batch window.
+    assert async_post.await_count == 3
     assert hybrid.metrics.attempted_real_count == 3
     assert hybrid.metrics.successful_real_count == 3
     assert hybrid.metrics.fallback_count == 0
@@ -180,13 +186,6 @@ def test_hybrid_provider_refines_top_n() -> None:
 
 
 def test_hybrid_provider_metrics_use_actual_refined_count_for_fallbacks() -> None:
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {
-        "choices": [{"message": {"content": '{"action": "UNKNOWN", "confidence": 0.5}'}}]
-    }
-
     real = _make_provider()
     hybrid = HybridInferenceProvider(real=real, top_n=10)
     local = LocalInferenceProvider()
@@ -201,7 +200,8 @@ def test_hybrid_provider_metrics_use_actual_refined_count_for_fallbacks() -> Non
         for i in range(1, 3)
     ]
 
-    with patch("httpx.post", return_value=mock_resp):
+    async_post = _make_async_post('{"action": "UNKNOWN", "confidence": 0.5}')
+    with patch("httpx.AsyncClient.post", async_post):
         refined = hybrid.refine_top_n(states, _SCENARIO, archetypes)
 
     assert len(refined) == 2
@@ -209,3 +209,78 @@ def test_hybrid_provider_metrics_use_actual_refined_count_for_fallbacks() -> Non
     assert hybrid.metrics.successful_real_count == 0
     assert hybrid.metrics.fallback_count == 2
     assert hybrid.metrics.last_error is not None
+
+
+def test_evaluate_agents_batch_returns_concurrent_results() -> None:
+    """Direct check that the async batch path fans out N requests concurrently
+    and returns one AgentState per request, in input order."""
+    provider = _make_provider()
+    archetypes = [DEFAULT_ARCHETYPES[i % len(DEFAULT_ARCHETYPES)] for i in range(5)]
+    requests = [
+        (f"agent-{i:03d}", archetypes[i], _SCENARIO, 0.1 * i) for i in range(5)
+    ]
+
+    async_post = _make_async_post(json.dumps({"action": "buy", "confidence": 0.66}))
+    with patch("httpx.AsyncClient.post", async_post):
+        results = asyncio.run(provider.evaluate_agents_batch(requests=requests))
+
+    assert [s.agent_id for s in results] == [f"agent-{i:03d}" for i in range(5)]
+    assert all(s.inference_source == "0g_compute" for s in results)
+    assert all(abs(s.confidence - 0.66) < 1e-6 for s in results)
+    assert async_post.await_count == 5
+
+
+def test_refine_top_n_batches_in_windows_of_five() -> None:
+    """A 7-agent top-N pool should fan out across two batch windows
+    (BATCH_SIZE=5 + 2), still using a single shared connection pool."""
+    real = _make_provider()
+    hybrid = HybridInferenceProvider(real=real, top_n=7)
+    local = LocalInferenceProvider()
+    archetypes = {f"agent-{i:03d}": DEFAULT_ARCHETYPES[i % len(DEFAULT_ARCHETYPES)] for i in range(1, 8)}
+    states = [
+        local.evaluate_agent(
+            agent_id=f"agent-{i:03d}",
+            archetype=archetypes[f"agent-{i:03d}"],
+            scenario=_SCENARIO,
+            jitter=float(i) / 10,
+        )
+        for i in range(1, 8)
+    ]
+
+    async_post = _make_async_post(json.dumps({"action": "buy", "confidence": 0.8}))
+    with patch("httpx.AsyncClient.post", async_post):
+        refined = hybrid.refine_top_n(states, _SCENARIO, archetypes)
+
+    assert len(refined) == 7
+    assert sum(1 for s in refined if s.inference_source == "0g_compute") == 7
+    assert async_post.await_count == 7
+    assert hybrid.metrics.successful_real_count == 7
+
+
+def test_refine_top_n_works_inside_running_event_loop() -> None:
+    """`engine.inject_scenario` runs inside the FastAPI event loop, so
+    `refine_top_n` must not crash with `asyncio.run() cannot be called from a
+    running event loop`. The provider should detect the running loop and
+    dispatch the batch on a helper thread instead."""
+    real = _make_provider()
+    hybrid = HybridInferenceProvider(real=real, top_n=2)
+    local = LocalInferenceProvider()
+    archetypes = {f"agent-{i:03d}": DEFAULT_ARCHETYPES[i % len(DEFAULT_ARCHETYPES)] for i in range(1, 4)}
+    states = [
+        local.evaluate_agent(
+            agent_id=f"agent-{i:03d}",
+            archetype=archetypes[f"agent-{i:03d}"],
+            scenario=_SCENARIO,
+            jitter=float(i) / 10,
+        )
+        for i in range(1, 4)
+    ]
+
+    async def _drive() -> list:
+        async_post = _make_async_post(json.dumps({"action": "hold", "confidence": 0.5}))
+        with patch("httpx.AsyncClient.post", async_post):
+            return hybrid.refine_top_n(states, _SCENARIO, archetypes)
+
+    refined = asyncio.run(_drive())
+    assert len(refined) == 3
+    assert sum(1 for s in refined if s.inference_source == "0g_compute") == 2
