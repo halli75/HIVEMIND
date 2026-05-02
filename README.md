@@ -116,20 +116,28 @@ can drive 500 visual agents.
 
 ### AXL Message Schema
 
-| Message Type | Key Fields | Purpose | Direction |
-|---|---|---|---|
-| `TRADE_INTENT` | `agent_id`, `token_in`, `token_out`, `amount`, `urgency` | Broadcast a pending trade. Triggers MEV Searcher Tier 1 promotion. Core simulation signal. | Agent → Pool broadcast |
-| `MARKET_SIGNAL` | `agent_id`, `signal_type`, `asset`, `confidence`, `timestamp` | Share a market view. Degen copy logic listens here. Most frequent message type. | Agent → Pool broadcast |
-| `POOL_STATE` | `pool_id`, `price`, `tvl`, `volume_24h`, `tick` | Periodic oracle update. Used by Arbitrageur and LP Provider heuristics. | Oracle → Pool broadcast |
-| `COALITION_INVITE` | `initiator_id`, `strategy`, `target_agents[]`, `expiry` | Coordinate joint LP provision or governance vote between specific agents. | Agent → Agent (direct) |
-| `GOVERNANCE_SIGNAL` | `proposal_id`, `vote`, `stake_weight` | DAO voting coordination across agents with stake. | Agent → Pool broadcast |
-| `INFERENCE_RESULT` | `agent_id`, `decision`, `confidence`, `tier`, `tick_id` | Published after Tier 1 inference. Heuristic-tier agents copy high-confidence results. | Agent → Pool broadcast |
-| `SCENARIO_SHOCK` | `shock_type`, `magnitude`, `asset`, `injected_at` | God Mode injection to all pools. Sets `urgency_override=MAX` on all agents. | Controller → All pools |
+All 7 message types below are live: each has a `TypedDict` payload schema in
+[`packages/hivemind-sdk/src/hivemind_sdk/axl.py`](packages/hivemind-sdk/src/hivemind_sdk/axl.py),
+is emitted by a real publisher in `engine.py` or `runner.py`, and is consumed by a real handler in
+`engine._axl_pool_drain` or the runner evaluator. The `Status` column links each row to its publish
++ consume sites and the regression test that pins its behavior.
 
-All 7 types are enforced by the `AxlMessageType` Literal and `AXL_MESSAGE_TYPES` set in
-[`packages/hivemind-sdk/src/hivemind_sdk/axl.py`](packages/hivemind-sdk/src/hivemind_sdk/axl.py).
-Payload TypedDicts for `POOL_STATE`, `COALITION_INVITE`, and `GOVERNANCE_SIGNAL` are defined at
-lines 31–56 of that file.
+| Message Type | Key Fields | Purpose | Direction | Publisher → Consumer | Status |
+|---|---|---|---|---|---|
+| `TRADE_INTENT` | `agent_id`, `archetype`, `scenario_id`, `action`, `confidence`, `size_usd_est` | Broadcast a pending trade after Tier 1 inference. Core simulation signal that downstream evaluators replay. | Agent → Pool broadcast | `engine._axl_pool_publish_tier1` → evaluator runner | Live (every Tier 1 result) |
+| `MARKET_SIGNAL` | `agent_id` *or* `target_agent_id`, `signal_type`, `signal_strength`, `confidence` | Share a market view. The drain handler turns it into a per-agent `_axl_urgency_boost` so receivers bid for Tier 1 admission next tick. | Agent → Pool broadcast | `runner.run_coordinator` → `engine._handle_market_signal` | Live (1/3 of coordinator slots) |
+| `POOL_STATE` | `pool_address`, `token0`, `token1`, `fee_tier`, `tick`, `sqrt_price_x96`, `liquidity`, `tvl_usd` | Periodic oracle frame. The first frame establishes a TVL baseline; subsequent frames boost Arbitrageur and LP Provider urgency on TVL deltas (≥2% drop or ≥1% rise). | Oracle → Pool broadcast | `runner._coordinator_payload` → `engine._handle_pool_state` | Live (1/3 of coordinator slots) |
+| `COALITION_INVITE` | `coalition_id`, `proposer_agent_id`, `target_agent_id`, `objective`, `expires_at_tick`, `minimum_stake` | Whales / LP Providers with high-confidence buy or LP intents recruit a same-archetype peer. The target's next Tier 2/3 evaluation substitutes the coalition action and the rationale records the coordination. | Agent → Agent (direct) | `engine._maybe_publish_coalition_invite` → `engine._handle_coalition_invite` → `engine._coalition_action_override` | Live (gated on confidence ≥ 0.75) |
+| `GOVERNANCE_SIGNAL` | `proposal_id`, `voter_agent_id`, `vote` (`for`/`against`/`abstain`), `voting_power`, `rationale` | `governance_voter` agents emit stake-weighted votes on Tier 1 vote actions. Tally hits 50% quorum → one-shot outcome line surfaces in the next snapshot's `event_log`. | Agent → Pool broadcast | `engine._maybe_publish_governance_signal` → `engine._handle_governance_signal` → `event_log` | Live (gated on `action == "vote"`) |
+| `INFERENCE_RESULT` | `agent_id`, `scenario_id`, `action`, `confidence`, `score`, `aiq` | Published once per Tier 1 result so downstream evaluators / heuristic tiers can copy high-confidence decisions. | Agent → Pool broadcast | `engine._axl_pool_publish_tier1` → evaluator runner | Live (every Tier 1 result) |
+| `SCENARIO_SHOCK` | `scenario_id`, `shock_type`, `magnitude`, `asset`, `injected_at`, `signal_strength` | God Mode injection from the controller / coordinator. Forwarded by `LocalAxlMessageBus.broadcast_scenario`; the local runner also alternates one into the coordinator stream every 3rd tick. | Controller → All pools | `LocalAxlMessageBus.broadcast_scenario` + `runner.run_coordinator` → all node inboxes | Live (1/3 of coordinator slots, plus injection path) |
+
+Test coverage for the previously-stubbed types lives in
+[`packages/hivemind-sdk/tests/test_engine_axl.py`](packages/hivemind-sdk/tests/test_engine_axl.py)
+and pins both halves of each contract: drain handlers (`test_pool_state_*`, `test_coalition_invite_*`,
+`test_governance_signal_*`) and publish helpers
+(`test_publish_emits_coalition_invite_for_high_confidence_whale_buy`,
+`test_publish_emits_governance_signal_with_for_vote_when_confident`, etc.).
 
 ### Node Topology
 
