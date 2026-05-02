@@ -6,6 +6,26 @@ DeFi Swarm Intelligence Engine for the ETHGlobal OpenAgents hackathon.
 
 HIVEMIND simulates a DeFi swarm, crystallizes the winning strategy into an iNFT-backed agent, and executes a real Uniswap trade.
 
+## Simulation Validity
+
+HIVEMIND does not predict prices. It stress-tests strategies. Three defensible claims justify using
+simulation fitness as a proxy for real-world performance:
+
+- **Calibrated seeding:** The simulation loads static on-chain data — real Uniswap pool TVL, 90 days
+  of ETH price history, LP position events, whale wallet distributions — from seed files committed to
+  the repo (`data/seeds/`). Agents calibrate their behavioral parameters against this observed data at
+  startup. The simulation replays plausible market dynamics, not random noise.
+
+- **Relative ranking, not absolute prediction:** HIVEMIND does not predict whether ETH will be $3,000
+  in four hours. It ranks strategies against each other within the same environment across varied shock
+  scenarios. If Strategy A consistently outperforms Strategy B, that signal is equivalent in logic to
+  backtesting — meaningful regardless of price-prediction accuracy.
+
+- **Stress testing, not forecasting:** The scenario injector's primary value is stress testing: "What
+  happens to my LP position if ETH drops 20%?" A simulator that captures the directional dynamics of
+  DeFi — liquidation cascades, arb spread narrowing, LP range retraction — provides actionable
+  intelligence regardless of exact price prediction.
+
 ## Target Integrations
 
 - 0G: Compute, Storage, Chain, iNFTs, and `hivemind-sdk`.
@@ -35,7 +55,7 @@ Latest run: `runs/proof-20260501-184559/` (ignored evidence folder). Tracked non
 | 0G Storage | Verified in mint path | Encrypted strategy upload returned root hash `0xc753be4f5c0d891138e488a0d17099d5e15162cc4ebd0b5b010e44e3b22b9765` |
 | iNFT mint | Verified on Galileo | `/mint` returned `status=minted`, token `5`, tx `0x8710be02581198e1b5e8e1787cf99b40cd55c829483fd2adc3961ad76c5c1862` |
 | Uniswap | Live quote | Sepolia quote id `2cb04358-589b-4aab-bf61-78b32d354002`, `0.001 WETH -> 8.279133 USDC` |
-| Swap | Gated | `run_swap.py` refused to sign because `HIVEMIND_ALLOW_TESTNET_SWAP=true` was not enabled |
+| Swap | Verified on Sepolia | tx [`0xeaa747da08941805d3fe3bf521163a2ac1e16762caa3803eb6ab6a9f52d047e8`](https://sepolia.etherscan.io/tx/0xeaa747da08941805d3fe3bf521163a2ac1e16762caa3803eb6ab6a9f52d047e8), block `10776538`, `0.001 WETH -> 8.139153 USDC`, status=1, gas `115567`. Receipt: [`docs/evidence/uniswap-swap-receipt.md`](docs/evidence/uniswap-swap-receipt.md) |
 
 ## AXL Benchmark Results
 
@@ -58,6 +78,44 @@ hivemind-sdk's architecture is directly inspired by OpenClaw's agent framework. 
 | Gateway — single control plane for all agents, sessions, channels | SwarmEngine — orchestrates all agent instances, inference scheduling, AXL routing |
 | Session model — persistent context per user/channel | Per-agent KV Store (live state) + Log Store (history) |
 | Extensions — modular add-ons to core gateway behavior | ScenarioInjector + ScoringEngine — modular components extending SwarmEngine |
+
+## AXL Integration
+
+HIVEMIND uses Gensyn AXL as its cross-process P2P messaging layer. Two to five real AXL node
+processes run as separate OS processes; agents coordinate decisions across them using a typed message
+protocol. Visual agent scale in the Sigma.js graph is decoupled from real node count — 2 real nodes
+can drive 500 visual agents.
+
+### AXL Message Schema
+
+| Message Type | Key Fields | Purpose | Direction |
+|---|---|---|---|
+| `TRADE_INTENT` | `agent_id`, `token_in`, `token_out`, `amount`, `urgency` | Broadcast a pending trade. Triggers MEV Searcher Tier 1 promotion. Core simulation signal. | Agent → Pool broadcast |
+| `MARKET_SIGNAL` | `agent_id`, `signal_type`, `asset`, `confidence`, `timestamp` | Share a market view. Degen copy logic listens here. Most frequent message type. | Agent → Pool broadcast |
+| `POOL_STATE` | `pool_id`, `price`, `tvl`, `volume_24h`, `tick` | Periodic oracle update. Used by Arbitrageur and LP Provider heuristics. | Oracle → Pool broadcast |
+| `COALITION_INVITE` | `initiator_id`, `strategy`, `target_agents[]`, `expiry` | Coordinate joint LP provision or governance vote between specific agents. | Agent → Agent (direct) |
+| `GOVERNANCE_SIGNAL` | `proposal_id`, `vote`, `stake_weight` | DAO voting coordination across agents with stake. | Agent → Pool broadcast |
+| `INFERENCE_RESULT` | `agent_id`, `decision`, `confidence`, `tier`, `tick_id` | Published after Tier 1 inference. Heuristic-tier agents copy high-confidence results. | Agent → Pool broadcast |
+| `SCENARIO_SHOCK` | `shock_type`, `magnitude`, `asset`, `injected_at` | God Mode injection to all pools. Sets `urgency_override=MAX` on all agents. | Controller → All pools |
+
+All 7 types are enforced by the `AxlMessageType` Literal and `AXL_MESSAGE_TYPES` set in
+[`packages/hivemind-sdk/src/hivemind_sdk/axl.py`](packages/hivemind-sdk/src/hivemind_sdk/axl.py).
+Payload TypedDicts for `POOL_STATE`, `COALITION_INVITE`, and `GOVERNANCE_SIGNAL` are defined at
+lines 31–56 of that file.
+
+### Node Topology
+
+| Demo target | AXL nodes (separate processes) | Logical agents per node | Visual agents (Sigma.js) |
+|---|---|---|---|
+| Minimum viable demo | 2 | 50 | 100 (visual only) |
+| Full demo target | 5 | 100 | 500 (visual only) |
+
+Real AXL nodes drive decisions; all agents are rendered in the graph for visual scale.
+
+### Benchmark Results
+
+See [`apps/axl-node/benchmark_results.json`](apps/axl-node/benchmark_results.json). Summary
+reproduced in the [AXL Benchmark Results](#axl-benchmark-results) section above.
 
 ## Quickstart
 
@@ -251,4 +309,4 @@ cd contracts
 
 ## Current Boundaries
 
-The critical path remains 0G, Gensyn AXL, and Uniswap. Live 0G Compute, 0G Storage upload during mint, Galileo iNFT mint, and Uniswap quote are proven; Sepolia swap stays behind `HIVEMIND_ALLOW_TESTNET_SWAP=true` and operator review. `HivemindINFT` is ERC-721-compatible for wallet/marketplace/indexer surfaces while its ERC-7857-style verifier proof validation remains hackathon-level and deferred. ENS, KeeperHub, breeding, marketplace, LP management, live GraphRAG, and mainnet execution remain off the critical path.
+The critical path remains 0G, Gensyn AXL, and Uniswap. Live 0G Compute, 0G Storage upload during mint, Galileo iNFT mint, Uniswap quote, and a confirmed Sepolia swap (tx `0xeaa747da08941805d3fe3bf521163a2ac1e16762caa3803eb6ab6a9f52d047e8`) are all proven; submission still requires `HIVEMIND_ALLOW_TESTNET_SWAP=true` plus operator review or the new `--yes` / `HIVEMIND_SWAP_SKIP_CONFIRM` opt-in for non-interactive demo runs. `HivemindINFT` is ERC-721-compatible for wallet/marketplace/indexer surfaces while its ERC-7857-style verifier proof validation remains hackathon-level and deferred. ENS, KeeperHub, breeding, marketplace, LP management, live GraphRAG, and mainnet execution remain off the critical path.

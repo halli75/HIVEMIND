@@ -38,6 +38,8 @@ type ApiAgent = {
   aiq: number;
   score: number;
   rationale?: string;
+  inference_source?: string;
+  model?: string;
 };
 
 type ApiTierMetric = {
@@ -198,6 +200,8 @@ const expandVisualAgents = (
       pnl_bps: source.pnl_bps,
       aiq: source.aiq,
       rationale: source.rationale,
+      inferenceSource: source.inference_source,
+      model: source.model,
     };
   });
 };

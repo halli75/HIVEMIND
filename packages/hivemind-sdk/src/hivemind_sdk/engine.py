@@ -387,6 +387,9 @@ class SwarmEngine:
                 confidence=agent.confidence,
                 pnl_bps=agent.pnl_bps,
                 aiq=agent.aiq,
+                rationale=agent.rationale,
+                inference_source=agent.inference_source,
+                model=agent.model,
             )
             for index, agent in enumerate(ranked)
         )
