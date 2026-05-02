@@ -6,34 +6,6 @@ DeFi Swarm Intelligence Engine for the ETHGlobal OpenAgents hackathon.
 
 HIVEMIND simulates a DeFi swarm, crystallizes the winning strategy into an iNFT-backed agent, and executes a real Uniswap trade.
 
-## Dashboard
-
-A neural-HUD style React/Vite console (`apps/web`) drives every demo path off the
-FastAPI WebSocket stream — scenario injection, live tier routing, AXL message
-counters, the force-directed swarm graph, and the iNFT mint flow all run from
-this single screen.
-
-![HIVEMIND dashboard — scenario injected, swarm graph live, tier routing and metrics streaming](docs/screenshots/dashboard-overview.png)
-
-Every node in the Sigma.js force-directed graph is clickable. Selecting an agent
-slides in a detail panel that surfaces its archetype, current action, the
-*actual* heuristic / 0G / local-model rationale produced by the engine for this
-tick, and live telemetry (score, P&L, AIQ, confidence). The example below is the
-real `agent-012` entry from the leaderboard above — a `governance_voter` whose
-rationale shows it is copying the vote of `leader-001` based on a 1,000,000-token
-stake weight.
-
-![Agent detail panel — agent-012 governance_voter, rank #1, real rationale and telemetry from the live API](docs/screenshots/agent-detail-panel.png)
-
-The leaderboard ranks agents by composite score; clicking a row also drives the
-detail panel. P&L is right-aligned with tabular numerals so signs and `%` stay
-flush against the row edge across the whole table.
-
-![Leaderboard — rank-one star highlight, tier badges, score column, right-aligned P&L](docs/screenshots/leaderboard.png)
-
-Screenshots are captured from a live `npm run dev` session against the FastAPI
-backend (`apps/api`); reproduce them by following the `Quickstart` paths below.
-
 ## Simulation Validity
 
 HIVEMIND does not predict prices. It stress-tests strategies. Three defensible claims justify using
