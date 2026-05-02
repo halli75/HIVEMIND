@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Graph from "graphology";
 import Sigma from "sigma";
 import forceAtlas2 from "graphology-layout-forceatlas2";
+import FA2Layout from "graphology-layout-forceatlas2/worker";
 import { createNodeBorderProgram } from "@sigma/node-border";
 import type { Archetype, AxlEdgeMessage, SwarmAgent } from "../types";
 
@@ -25,14 +26,41 @@ export const ARCHETYPE_LABELS: Record<Archetype, string> = {
   mev_searcher: "MEV Searcher",
 };
 
-const TIER_SIZES = { T1: 12, T2: 8, T3: 5 } as const;
+export const ACTION_COLORS: Record<string, string> = {
+  buy: "#00ffaa",
+  sell: "#ff3355",
+  arb: "#cc77ff",
+  front_run: "#ffb800",
+  rebalance: "#00bfff",
+  provide_liquidity: "#00ff80",
+  hedge: "#ff7700",
+  vote: "#aa88ff",
+  hold: "#4a6060",
+};
 
-const WINNER_FILL = "#f3c84a";
-const WINNER_BORDER = "#fff2a8";
+export const ACTION_LABELS: Record<string, string> = {
+  buy: "BUY",
+  sell: "SELL",
+  arb: "ARB",
+  front_run: "FRONT-RUN",
+  rebalance: "REBAL",
+  provide_liquidity: "LP+",
+  hedge: "HEDGE",
+  vote: "VOTE",
+  hold: "HOLD",
+};
+
+const DEFAULT_ACTION_COLOR = "#4a6060";
+
+const TIER_SIZES = { T1: 13, T2: 8, T3: 5 } as const;
+
+const WINNER_FILL = "#fff09a";
+const WINNER_BORDER = "#ffe45c";
+const SELECTED_BORDER = "#00ffaa";
 
 const MAX_RENDERED_NODES = 500;
-const PULSE_DURATION_MS = 400;
-const EDGE_DECAY_TICKS = 3;
+const PULSE_DURATION_MS = 480;
+const EDGE_DECAY_TICKS = 4;
 const CONNECTING_OVERLAY_MS = 3000;
 
 const sampleAgents = (agents: SwarmAgent[], cap: number): SwarmAgent[] => {
@@ -50,23 +78,45 @@ function SwarmGraphCanvas({
   axlMessages,
   tick,
   winnerId,
+  onNodeClick,
+  selectedNodeId,
+  onBackgroundClick,
 }: {
   agents: SwarmAgent[];
   axlMessages: AxlEdgeMessage[];
   tick: number;
   winnerId: string | null;
+  onNodeClick?: (nodeId: string) => void;
+  selectedNodeId?: string | null;
+  onBackgroundClick?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sigmaRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
+  const layoutRef = useRef<InstanceType<typeof FA2Layout> | null>(null);
   const pulseStateRef = useRef<Map<string, number>>(new Map());
   const animationRef = useRef<number | null>(null);
   const winnerIdRef = useRef<string | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
   const previousWinnerIdRef = useRef<string | null>(null);
+  const onNodeClickRef = useRef<typeof onNodeClick>(onNodeClick);
+  const onBackgroundClickRef = useRef<typeof onBackgroundClick>(onBackgroundClick);
 
   useEffect(() => {
     winnerIdRef.current = winnerId;
   }, [winnerId]);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedNodeId ?? null;
+  }, [selectedNodeId]);
+
+  useEffect(() => {
+    onNodeClickRef.current = onNodeClick;
+  }, [onNodeClick]);
+
+  useEffect(() => {
+    onBackgroundClickRef.current = onBackgroundClick;
+  }, [onBackgroundClick]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -76,14 +126,15 @@ function SwarmGraphCanvas({
 
     const sigma = new Sigma(graph, containerRef.current, {
       renderEdgeLabels: false,
-      defaultEdgeColor: "rgba(157, 185, 165, 0.35)",
-      labelColor: { color: "#e8dba0" },
-      labelSize: 12,
+      defaultEdgeColor: "rgba(0, 255, 170, 0.35)",
+      labelColor: { color: "#a8ffd8" },
+      labelSize: 11,
       labelWeight: "600",
+      labelFont: "'Chakra Petch', monospace",
       nodeProgramClasses: {
         "border-node": createNodeBorderProgram({
           borders: [
-            { size: { value: 0.18 }, color: { attribute: "borderColor" } },
+            { size: { value: 0.22 }, color: { attribute: "borderColor" } },
             { size: { fill: true }, color: { attribute: "color" } },
           ],
         }),
@@ -91,27 +142,36 @@ function SwarmGraphCanvas({
     });
     sigmaRef.current = sigma;
 
+    sigma.on("clickNode", ({ node }) => {
+      onNodeClickRef.current?.(node);
+    });
+
+    sigma.on("clickStage", () => {
+      onBackgroundClickRef.current?.();
+    });
+
     const animate = () => {
       const now = performance.now();
       const pulseState = pulseStateRef.current;
       const wId = winnerIdRef.current;
+      const sId = selectedIdRef.current;
       let dirty = false;
 
       pulseState.forEach((startedAt, nodeId) => {
         const elapsed = now - startedAt;
         if (elapsed >= PULSE_DURATION_MS) {
-          if (graph.hasNode(nodeId) && nodeId !== wId) {
+          if (graph.hasNode(nodeId) && nodeId !== wId && nodeId !== sId) {
             graph.setNodeAttribute(nodeId, "size", graph.getNodeAttribute(nodeId, "baseSize"));
           }
           pulseState.delete(nodeId);
           dirty = true;
           return;
         }
-        if (graph.hasNode(nodeId) && nodeId !== wId) {
+        if (graph.hasNode(nodeId) && nodeId !== wId && nodeId !== sId) {
           const phase = elapsed / PULSE_DURATION_MS;
           const wave = Math.sin(phase * Math.PI);
           const baseSize = graph.getNodeAttribute(nodeId, "baseSize");
-          graph.setNodeAttribute(nodeId, "size", baseSize * (1 + 0.5 * wave));
+          graph.setNodeAttribute(nodeId, "size", baseSize * (1 + 0.6 * wave));
           dirty = true;
         }
       });
@@ -120,7 +180,15 @@ function SwarmGraphCanvas({
         const baseSize = graph.getNodeAttribute(wId, "baseSize");
         const phase = (now % 1500) / 1500;
         const wave = (Math.sin(phase * Math.PI * 2) + 1) / 2;
-        graph.setNodeAttribute(wId, "size", baseSize * (1 + 0.4 * wave));
+        graph.setNodeAttribute(wId, "size", baseSize * (1 + 0.45 * wave));
+        dirty = true;
+      }
+
+      if (sId && sId !== wId && graph.hasNode(sId)) {
+        const baseSize = graph.getNodeAttribute(sId, "baseSize");
+        const phase = (now % 1100) / 1100;
+        const wave = (Math.sin(phase * Math.PI * 2) + 1) / 2;
+        graph.setNodeAttribute(sId, "size", baseSize * (1.7 + 0.25 * wave));
         dirty = true;
       }
 
@@ -131,6 +199,10 @@ function SwarmGraphCanvas({
 
     return () => {
       if (animationRef.current !== null) cancelAnimationFrame(animationRef.current);
+      if (layoutRef.current) {
+        layoutRef.current.kill();
+        layoutRef.current = null;
+      }
       sigma.kill();
       graph.clear();
       sigmaRef.current = null;
@@ -157,15 +229,17 @@ function SwarmGraphCanvas({
       const tierBase = TIER_SIZES[agent.tier];
       const baseSize = isWinner ? tierBase * 1.6 : tierBase;
       const archetypeColor = ARCHETYPE_COLORS[agent.archetype] ?? "#888888";
+      const action = agent.action ?? "hold";
+      const actionColor = ACTION_COLORS[action] ?? DEFAULT_ACTION_COLOR;
       const color = isWinner ? WINNER_FILL : archetypeColor;
       const borderColor = isWinner
         ? WINNER_BORDER
         : agent.tier === "T1"
-          ? "#f6f0e3"
+          ? actionColor
           : agent.tier === "T2"
-            ? "rgba(246, 240, 227, 0.45)"
+            ? `${actionColor}aa`
             : archetypeColor;
-      const label = isWinner ? `WINNER / ${agent.id}` : agent.id;
+      const label = isWinner ? `★ ${agent.id}` : agent.id;
       const angle = index * 2.399963;
       const ring = Math.sqrt((index + 1) / Math.max(1, renderable.length));
       const fallbackX = Math.cos(angle) * ring * 50;
@@ -179,6 +253,7 @@ function SwarmGraphCanvas({
         type: "border-node",
         archetype: agent.archetype,
         tier: agent.tier,
+        action,
         forceLabel: isWinner,
       };
       if (graph.hasNode(agent.id)) {
@@ -197,6 +272,22 @@ function SwarmGraphCanvas({
         iterations: 80,
         settings: { gravity: 1, scalingRatio: 2, slowDown: 3, barnesHutOptimize: graph.order > 200 },
       });
+
+      // Start continuous physics worker after seeding the layout once.
+      if (!layoutRef.current) {
+        const layout = new FA2Layout(graph, {
+          settings: {
+            gravity: 0.35,
+            scalingRatio: 3,
+            slowDown: 18,
+            adjustSizes: false,
+            barnesHutOptimize: graph.order > 200,
+            strongGravityMode: false,
+          },
+        });
+        layout.start();
+        layoutRef.current = layout;
+      }
     }
 
     const edgesToKeep = new Set<string>();
@@ -204,14 +295,18 @@ function SwarmGraphCanvas({
       if (!graph.hasNode(message.source) || !graph.hasNode(message.target)) return;
       const age = tick - message.tick;
       if (age >= EDGE_DECAY_TICKS) return;
-      const opacity = Math.max(0.1, 1 - age / EDGE_DECAY_TICKS);
+      const opacity = Math.max(0.15, 1 - age / EDGE_DECAY_TICKS);
       const edgeKey = `${message.source}->${message.target}`;
       edgesToKeep.add(edgeKey);
-      const color = `rgba(157, 185, 165, ${opacity.toFixed(2)})`;
+      const color =
+        age === 0
+          ? `rgba(0, 255, 170, ${opacity.toFixed(2)})`
+          : `rgba(120, 200, 180, ${opacity.toFixed(2)})`;
+      const size = age === 0 ? 1.6 : 1;
       if (graph.hasEdge(message.source, message.target)) {
-        graph.mergeEdgeAttributes(message.source, message.target, { color, size: 1 });
+        graph.mergeEdgeAttributes(message.source, message.target, { color, size });
       } else {
-        graph.addEdgeWithKey(edgeKey, message.source, message.target, { color, size: 1 });
+        graph.addEdgeWithKey(edgeKey, message.source, message.target, { color, size });
       }
     });
 
@@ -233,6 +328,39 @@ function SwarmGraphCanvas({
   }, [agents, axlMessages, tick]);
 
   useEffect(() => {
+    const graph = graphRef.current;
+    const sigma = sigmaRef.current;
+    if (!graph || !sigma) return;
+    const wId = winnerIdRef.current;
+    graph.forEachNode((nodeId) => {
+      const base = graph.getNodeAttribute(nodeId, "baseSize");
+      if (typeof base !== "number") return;
+      if (nodeId === wId) return;
+      if (nodeId === selectedNodeId) {
+        graph.setNodeAttribute(nodeId, "borderColor", SELECTED_BORDER);
+      } else {
+        // Restore action-derived border using current node attributes.
+        const tier = graph.getNodeAttribute(nodeId, "tier") as string | undefined;
+        const action = (graph.getNodeAttribute(nodeId, "action") as string | undefined) ?? "hold";
+        const archetype = graph.getNodeAttribute(nodeId, "archetype") as Archetype | undefined;
+        const actionColor = ACTION_COLORS[action] ?? DEFAULT_ACTION_COLOR;
+        const archetypeColor = (archetype && ARCHETYPE_COLORS[archetype]) || "#888888";
+        const restored =
+          tier === "T1"
+            ? actionColor
+            : tier === "T2"
+              ? `${actionColor}aa`
+              : archetypeColor;
+        graph.setNodeAttribute(nodeId, "borderColor", restored);
+        if (!pulseStateRef.current.has(nodeId)) {
+          graph.setNodeAttribute(nodeId, "size", base);
+        }
+      }
+    });
+    sigma.refresh();
+  }, [selectedNodeId]);
+
+  useEffect(() => {
     if (!winnerId || winnerId === previousWinnerIdRef.current) return;
     const sigma = sigmaRef.current;
     const graph = graphRef.current;
@@ -249,7 +377,6 @@ function SwarmGraphCanvas({
         { duration: 800 },
       );
     } catch {
-      // sigma may not be ready yet on first paint; the next agents update will retry
       previousWinnerIdRef.current = null;
     }
   }, [winnerId]);
@@ -258,8 +385,9 @@ function SwarmGraphCanvas({
 }
 
 function GraphLegend() {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const archetypes = Object.keys(ARCHETYPE_LABELS) as Archetype[];
+  const actionKeys = Object.keys(ACTION_LABELS);
 
   return (
     <div className={`graph-legend ${open ? "open" : "closed"}`}>
@@ -271,13 +399,31 @@ function GraphLegend() {
       >
         <span>Legend</span>
         <span className="graph-legend-chevron" aria-hidden>
-          {open ? "-" : "+"}
+          {open ? "−" : "+"}
         </span>
       </button>
       {open ? (
         <div className="graph-legend-body">
           <div className="graph-legend-section">
-            <p className="graph-legend-eyebrow">Archetype</p>
+            <p className="graph-legend-eyebrow">Action / border</p>
+            <div className="graph-legend-grid">
+              {actionKeys.map((action) => (
+                <span className="graph-legend-row" key={action}>
+                  <span
+                    className="graph-legend-dot"
+                    style={{
+                      background: "transparent",
+                      border: `2px solid ${ACTION_COLORS[action]}`,
+                      boxShadow: `0 0 8px ${ACTION_COLORS[action]}`,
+                    }}
+                  />
+                  <span>{ACTION_LABELS[action]}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="graph-legend-section">
+            <p className="graph-legend-eyebrow">Archetype / fill</p>
             <div className="graph-legend-grid">
               {archetypes.map((arch) => (
                 <span className="graph-legend-row" key={arch}>
@@ -288,23 +434,6 @@ function GraphLegend() {
                   <span>{ARCHETYPE_LABELS[arch]}</span>
                 </span>
               ))}
-            </div>
-          </div>
-          <div className="graph-legend-section">
-            <p className="graph-legend-eyebrow">Tier (size)</p>
-            <div className="graph-legend-tiers">
-              <span className="graph-legend-row">
-                <span className="graph-legend-tier-dot tier-large" />
-                <span>T1 - 0G AI</span>
-              </span>
-              <span className="graph-legend-row">
-                <span className="graph-legend-tier-dot tier-medium" />
-                <span>T2 - local rules</span>
-              </span>
-              <span className="graph-legend-row">
-                <span className="graph-legend-tier-dot tier-small" />
-                <span>T3 - idle</span>
-              </span>
             </div>
           </div>
         </div>
@@ -319,12 +448,18 @@ export function SwarmGraph({
   tick,
   totalAgentCount,
   totalAxlMessages,
+  onNodeClick,
+  selectedNodeId,
+  onBackgroundClick,
 }: {
   agents: SwarmAgent[];
   axlMessages: AxlEdgeMessage[];
   tick: number;
   totalAgentCount: number;
   totalAxlMessages: number;
+  onNodeClick?: (nodeId: string) => void;
+  selectedNodeId?: string | null;
+  onBackgroundClick?: () => void;
 }) {
   const [showConnecting, setShowConnecting] = useState(true);
   const [tickPulse, setTickPulse] = useState(false);
@@ -353,45 +488,45 @@ export function SwarmGraph({
   const showOverlay = showConnecting && agents.length === 0;
 
   return (
-    <section
-      className={`panel graph-panel${tickPulse ? " tick-pulse" : ""}`}
-      aria-labelledby="graph-heading"
-    >
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Swarm execution</p>
-          <h2 id="graph-heading">
-            {agents.length === 0 ? "Awaiting swarm stream" : `${trueCount} agents reacting`}
-          </h2>
+    <div className={`graph-viewport-inner${tickPulse ? " tick-pulse" : ""}`}>
+      <SwarmGraphCanvas
+        agents={agents}
+        axlMessages={axlMessages}
+        tick={tick}
+        winnerId={winnerId}
+        onNodeClick={onNodeClick}
+        selectedNodeId={selectedNodeId}
+        onBackgroundClick={onBackgroundClick}
+      />
+
+      <div className="graph-overlay-top">
+        <div className="graph-title-block">
+          <span className="graph-title-line">SWARM // LIVE</span>
+          <span className="graph-title-sub">
+            {agents.length === 0
+              ? "AWAITING TELEMETRY"
+              : `${trueCount.toLocaleString()} AGENTS · TICK ${tick}`}
+          </span>
         </div>
-        <span className="tick" key={tick}>
-          tick {tick}
-        </span>
-      </div>
-      <div className="graph-stage">
-        <SwarmGraphCanvas
-          agents={agents}
-          axlMessages={axlMessages}
-          tick={tick}
-          winnerId={winnerId}
-        />
-        <div className="axl-counter-badge" aria-live="polite">
-          <span className="axl-counter-label">AXL msgs</span>
+        <div className="graph-axl-counter" aria-live="polite">
+          <span className="graph-axl-label">AXL MSGS</span>
           <strong key={totalAxlMessages}>{totalAxlMessages.toLocaleString()}</strong>
           {trueCount > MAX_RENDERED_NODES ? (
-            <span className="axl-counter-sub">
+            <span className="graph-axl-sub">
               rendering {renderedCount} / {trueCount}
             </span>
           ) : null}
         </div>
-        <GraphLegend />
-        {showOverlay ? (
-          <div className="graph-connecting-overlay">
-            <div className="graph-spinner" aria-hidden />
-            <p>Connecting to swarm...</p>
-          </div>
-        ) : null}
       </div>
-    </section>
+
+      <GraphLegend />
+
+      {showOverlay ? (
+        <div className="graph-connecting-overlay">
+          <div className="graph-spinner" aria-hidden />
+          <p>Establishing neural link...</p>
+        </div>
+      ) : null}
+    </div>
   );
 }

@@ -21,6 +21,11 @@ export type SwarmAgent = {
   confidence: number;
   strategy: string;
   archetype: Archetype;
+  sourceId: string;
+  action?: string;
+  pnl_bps?: number;
+  aiq?: number;
+  rationale?: string;
 };
 
 export type AxlEdgeMessage = {

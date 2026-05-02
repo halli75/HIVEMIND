@@ -19,6 +19,30 @@ const STRATEGIES = [
   "Oracle drift monitor",
 ];
 
+const MOCK_ACTIONS = [
+  "buy",
+  "sell",
+  "arb",
+  "front_run",
+  "rebalance",
+  "provide_liquidity",
+  "hedge",
+  "vote",
+  "hold",
+];
+
+const MOCK_RATIONALES = [
+  "Detected momentum divergence above 3σ threshold — entering long.",
+  "Order book imbalance signals imminent reversal — exit position.",
+  "Spread 19bps vs baseline 8bps — arbitrage window confirmed.",
+  "Large TRADE_INTENT detected in AXL feed — front-running entry.",
+  "IL delta exceeds 2% — rebalancing range to reduce impermanent loss.",
+  "Liquidity depth improving — providing concentrated liquidity.",
+  "Correlation spike with BTC — hedging via correlated asset short.",
+  "On-chain governance proposal #42 — voting aligned with stake-weighted consensus.",
+  "No clear edge — holding position pending next signal.",
+];
+
 const ARCHETYPE_DISTRIBUTION: { archetype: Archetype; weight: number }[] = [
   { archetype: "degen", weight: 30 },
   { archetype: "whale", weight: 20 },
@@ -57,9 +81,12 @@ const createAgents = (count: number): SwarmAgent[] =>
     const ring = Math.sqrt(index / count);
     const angle = index * 2.399963 + (index % 7) * 0.02;
     const score = 52 + ((index * 37) % 480) / 10;
+    const id = `agent-${String(index + 1).padStart(3, "0")}`;
+    const action = MOCK_ACTIONS[index % MOCK_ACTIONS.length];
+    const rationale = MOCK_RATIONALES[index % MOCK_RATIONALES.length];
 
     return {
-      id: `agent-${String(index + 1).padStart(3, "0")}`,
+      id,
       x: 50 + Math.cos(angle) * ring * 46,
       y: 50 + Math.sin(angle) * ring * 42,
       tier: tierForIndex(index),
@@ -68,6 +95,11 @@ const createAgents = (count: number): SwarmAgent[] =>
       confidence: 0.52 + (((index * 19) % 44) / 100),
       strategy: STRATEGIES[index % STRATEGIES.length],
       archetype: archetypeForIndex(index),
+      sourceId: id,
+      action,
+      pnl_bps: 5 + ((index * 13) % 80) - 20,
+      aiq: 0.3 + ((index * 7) % 60) / 100,
+      rationale,
     };
   });
 

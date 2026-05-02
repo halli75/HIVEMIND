@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import { useSwarmStream } from "./useSwarmStream";
 import { ARCHETYPE_COLORS, SwarmGraph } from "./components/SwarmGraph";
-import { InferenceMetrics } from "./components/InferenceMetrics";
+import { AgentDetailPanel } from "./components/AgentDetailPanel";
 
 const HIVEMIND_API_URL =
   (import.meta.env.VITE_HIVEMIND_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
@@ -81,9 +81,9 @@ const explorerFor = (entry: MintedAgent) => {
 };
 
 const tierLabels: Record<AgentTier, string> = {
-  T1: "Tier 1 / 0G active",
-  T2: "Tier 2 / local model",
-  T3: "Tier 3 / heuristic",
+  T1: "T1 / 0G",
+  T2: "T2 / local",
+  T3: "T3 / heur",
 };
 
 const statusLabels: Record<AgentStatus, string> = {
@@ -93,20 +93,8 @@ const statusLabels: Record<AgentStatus, string> = {
   winner: "Winner",
 };
 
-const SCENARIO_PRESETS: { label: string; text: string }[] = [
-  {
-    label: "Liquidity Crunch",
-    text: "USDC liquidity drains 40% on Uniswap Sepolia within two blocks. Stable pools thin out, slippage triples, and arbitrageurs race to rebalance positions before quotes go stale.",
-  },
-  {
-    label: "20% ETH Crash",
-    text: "ETH spot price drops 20% in five minutes after a major exchange outage. Funding rates spike, leveraged positions unwind, and conservative agents must de-risk into stablecoins.",
-  },
-  {
-    label: "Gas Spike",
-    text: "An NFT mint floods the mempool - base fee jumps from 8 gwei to 240 gwei for three blocks. Gas-aware agents must reprice or wait; impatient agents lose to slippage.",
-  },
-];
+const DEFAULT_SCENARIO =
+  "USDC liquidity drains 40% on Uniswap Sepolia within two blocks. Stable pools thin out, slippage triples, and arbitrageurs race to rebalance positions before quotes go stale.";
 
 function formatComposite(score: number | null): string {
   if (score === null) return "-";
@@ -114,7 +102,91 @@ function formatComposite(score: number | null): string {
   return score.toFixed(2);
 }
 
-function CrystallizePanel({
+function HudBar({
+  badges,
+  mode,
+  error,
+  tick,
+  agentCount,
+}: {
+  badges: ConnectionBadge[];
+  mode: "api" | "mock";
+  error: string | null;
+  tick: number;
+  agentCount: number;
+}) {
+  const visibleBadges = badges.filter((b) => !b.label.toLowerCase().startsWith("api"));
+  return (
+    <header className="hud-bar">
+      <div className="hud-brand">
+        <span className="hud-brand-mark">⬢</span>
+        <span className="hud-brand-name">HIVEMIND</span>
+        <span className="hud-brand-sub">// neural swarm console</span>
+      </div>
+
+      <div className="hud-ticker" aria-hidden>
+        <div className="hud-ticker-track">
+          <span>0G COMPUTE LIVE</span>
+          <span>·</span>
+          <span>GENSYN AXL MESH</span>
+          <span>·</span>
+          <span>UNISWAP SEPOLIA</span>
+          <span>·</span>
+          <span>iNFT CRYSTALLIZER</span>
+          <span>·</span>
+          <span>SWARM CONSENSUS @ {tick}</span>
+          <span>·</span>
+          <span>0G COMPUTE LIVE</span>
+          <span>·</span>
+          <span>GENSYN AXL MESH</span>
+          <span>·</span>
+          <span>UNISWAP SEPOLIA</span>
+          <span>·</span>
+          <span>iNFT CRYSTALLIZER</span>
+        </div>
+      </div>
+
+      <div className="hud-status">
+        <span className="hud-stat">
+          <span className="hud-stat-label">TICK</span>
+          <strong key={tick} className="hud-stat-value">
+            {tick.toString().padStart(5, "0")}
+          </strong>
+        </span>
+        <span className="hud-stat">
+          <span className="hud-stat-label">AGT</span>
+          <strong className="hud-stat-value">{agentCount.toLocaleString()}</strong>
+        </span>
+        <span className="hud-divider" />
+        {mode === "api" ? (
+          <span className="hud-badge live">
+            <span className="hud-dot" />
+            WS
+          </span>
+        ) : (
+          <span className="hud-badge mock">
+            <span className="hud-dot" />
+            MOCK
+          </span>
+        )}
+        {visibleBadges.map((badge) => (
+          <span className={`hud-badge ${badge.tone}`} key={badge.label}>
+            <span className="hud-dot" />
+            {badge.label}
+          </span>
+        ))}
+        {error ? (
+          <span className="hud-badge offline" title={error}>
+            <span className="hud-dot" />
+            ERR
+          </span>
+        ) : null}
+      </div>
+    </header>
+  );
+}
+
+function MintSection({
   apiAvailable,
   mintConfigured,
   winningEntry,
@@ -149,9 +221,7 @@ function CrystallizePanel({
     setIsCrystallizing(true);
     setError(null);
     try {
-      const response = await fetch(`${HIVEMIND_API_URL}/mint`, {
-        method: "POST",
-      });
+      const response = await fetch(`${HIVEMIND_API_URL}/mint`, { method: "POST" });
       if (!response.ok) {
         throw new Error(await errorMessageFromResponse(response));
       }
@@ -196,71 +266,65 @@ function CrystallizePanel({
   const archetypeColor = ARCHETYPE_COLORS[archetypeKey] ?? "#888888";
 
   return (
-    <section
-      className={`panel crystallize-panel hero${glow ? " minted-glow" : ""}`}
-      aria-labelledby="crystallize-heading"
-    >
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Winner crystallization</p>
-          <h2 id="crystallize-heading">Mint winning agent as iNFT</h2>
-        </div>
-        {!minted ? (
-          <span className={`connection-pill ${apiAvailable ? "live" : "mock"}`}>
-            {apiAvailable ? (mintConfigured ? "Mint endpoint" : "Contract not configured") : "API offline"}
-          </span>
-        ) : (
-          <span className="connection-pill live">Minted</span>
-        )}
-      </div>
-
+    <div className={`mint-section${glow ? " mint-glow" : ""}`}>
       {!minted ? (
-        <div className="crystallize-cta">
-          <button
-            type="button"
-            className="primary-button primary-large hero-button"
-            onClick={() => void handleCrystallize()}
-            disabled={isCrystallizing || !apiAvailable || !mintConfigured}
-          >
-            {isCrystallizing ? "Minting..." : "Mint Winner"}
-          </button>
-          {error ? <p className="connection-error">{error}</p> : null}
+        <div className="mint-cta-row">
+          <div className="mint-cta-label">
+            <p className="eyebrow">Crystallize winner</p>
+            <p className="mint-cta-subtitle">Mint top agent → 0G iNFT</p>
+          </div>
+          <div className="mint-cta-actions">
+            <span className={`mini-pill ${apiAvailable ? "live" : "mock"}`}>
+              {apiAvailable ? (mintConfigured ? "READY" : "NOT_CFG") : "API_DOWN"}
+            </span>
+            <button
+              type="button"
+              className="primary-button primary-large"
+              onClick={() => void handleCrystallize()}
+              disabled={isCrystallizing || !apiAvailable || !mintConfigured}
+            >
+              {isCrystallizing ? "MINTING..." : "▸ MINT WINNER"}
+            </button>
+          </div>
+          {error ? <p className="connection-error mint-error">{error}</p> : null}
         </div>
       ) : (
-        <div className="crystallize-success">
-          <div className="minted-badge">MINTED</div>
-          <div className="minted-stats">
-            <div className="minted-stat">
-              <span>Token ID</span>
-              <strong className="minted-token">
-                {minted.token_id === null ? "pending" : `#${minted.token_id}`}
-              </strong>
+        <div className="mint-success">
+          <div className="mint-success-top">
+            <div className="minted-badge">★ MINTED</div>
+            <div className="minted-stats">
+              <div className="minted-stat">
+                <span>TOKEN</span>
+                <strong className="minted-token">
+                  {minted.token_id === null ? "pending" : `#${minted.token_id}`}
+                </strong>
+              </div>
+              <div className="minted-stat">
+                <span>ARCH</span>
+                <strong className="minted-archetype">
+                  <span className="archetype-dot" style={{ background: archetypeColor }} />
+                  {minted.archetype ?? "unknown"}
+                </strong>
+              </div>
+              <div className="minted-stat">
+                <span>SCORE</span>
+                <strong className="minted-composite">{formatComposite(minted.composite_score)}</strong>
+              </div>
             </div>
-            <div className="minted-stat">
-              <span>Archetype</span>
-              <strong className="minted-archetype">
-                <span className="archetype-dot" style={{ background: archetypeColor }} />
-                {minted.archetype ?? "unknown"}
-              </strong>
-            </div>
-            <div className="minted-stat">
-              <span>Composite</span>
-              <strong className="minted-composite">{formatComposite(minted.composite_score)}</strong>
-            </div>
+            {explorerUrl ? (
+              <a
+                className="primary-button explorer-link"
+                href={explorerUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                ↗ 0G CHAINSCAN
+              </a>
+            ) : null}
           </div>
-          {explorerUrl ? (
-            <a
-              className="primary-button primary-large explorer-link"
-              href={explorerUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              View on 0G Chainscan
-            </a>
-          ) : null}
           {minted.tx_hash ? (
             <div className="tx-hash-row">
-              <span>Tx</span>
+              <span>TX</span>
               <code>{minted.tx_hash}</code>
               <button
                 type="button"
@@ -268,17 +332,17 @@ function CrystallizePanel({
                 onClick={() => void handleCopy(minted.tx_hash ?? "")}
                 aria-label="Copy transaction hash"
               >
-                {copied ? "Copied" : "Copy"}
+                {copied ? "✓" : "⎘"}
               </button>
             </div>
           ) : null}
           <div className="tx-hash-row">
-            <span>Storage</span>
+            <span>STO</span>
             <code>{minted.storage_ref}</code>
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -301,27 +365,16 @@ function ScenarioPanel({
     <section className="panel scenario-panel" aria-labelledby="scenario-heading">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">Scenario injection</p>
+          <p className="eyebrow">▸ Scenario inject</p>
           <h2 id="scenario-heading">Market shock prompt</h2>
         </div>
-      </div>
-      <div className="scenario-presets">
-        {SCENARIO_PRESETS.map((preset) => (
-          <button
-            type="button"
-            key={preset.label}
-            className="preset-chip"
-            onClick={() => onScenarioChange(preset.text)}
-          >
-            {preset.label}
-          </button>
-        ))}
       </div>
       <textarea
         value={scenario}
         onChange={(event) => onScenarioChange(event.target.value)}
         aria-label="Scenario text"
         spellCheck="true"
+        placeholder="Describe the market shock to inject into the swarm..."
       />
       <div className="control-row">
         <label htmlFor="agent-count">Agents</label>
@@ -343,126 +396,22 @@ function ScenarioPanel({
           onClick={onRunScenario}
           disabled={isRunningScenario}
         >
-          {isRunningScenario ? "Running..." : "Run Scenario"}
+          {isRunningScenario ? "▸ RUNNING..." : "▸ EXECUTE SCENARIO"}
         </button>
       </div>
     </section>
   );
 }
 
-function ConnectionStatusLine({
-  badges,
-  error,
+function CompactMetricsPanel({
+  metrics,
+  agents,
+  mode,
 }: {
-  badges: ConnectionBadge[];
-  error: string | null;
+  metrics: SwarmMetrics;
+  agents: SwarmAgent[];
+  mode: "api" | "mock";
 }) {
-  const visibleBadges = badges.filter((badge) => !badge.label.toLowerCase().startsWith("api"));
-
-  return (
-    <section className="panel status-line-panel" aria-labelledby="badges-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Connections</p>
-          <h2 id="badges-heading">Runtime sources</h2>
-        </div>
-      </div>
-      <div className="status-line">
-        {visibleBadges.map((badge, index) => (
-          <span className={`status-line-item ${badge.tone}`} key={badge.label}>
-            <span className="status-line-dot" aria-hidden />
-            <span>{badge.label}</span>
-            {index < visibleBadges.length - 1 ? (
-              <span className="status-line-sep" aria-hidden>
-                /
-              </span>
-            ) : null}
-          </span>
-        ))}
-      </div>
-      {error ? <p className="connection-error">{error}</p> : null}
-    </section>
-  );
-}
-
-function MetricPanel({ metrics, mode }: { metrics: SwarmMetrics; mode: "api" | "mock" }) {
-  const items = [
-    ["AXL messages", metrics.axlMessages.toLocaleString()],
-    ["AXL nodes online", metrics.axlNodesOnline.toLocaleString()],
-    ["AXL latest type", metrics.axlLastMessageType],
-    [
-      "AXL p50 latency",
-      metrics.axlP50LatencyMs === null ? "pending" : `${metrics.axlP50LatencyMs.toFixed(1)} ms`,
-    ],
-    [
-      "AXL p95 latency",
-      metrics.axlP95LatencyMs === null ? "pending" : `${metrics.axlP95LatencyMs.toFixed(1)} ms`,
-    ],
-    ["AXL failed nodes", metrics.axlFailedNodes.toLocaleString()],
-    ["0G inference calls", metrics.zeroGInferenceCalls.toLocaleString()],
-    ["AIQ size", `${metrics.aiqSize.toLocaleString()} kb`],
-    ["Fallback count", metrics.fallbackCount.toLocaleString()],
-    ["Latest swap receipt", metrics.latestSwapReceipt],
-  ];
-
-  return (
-    <section className="panel metrics-panel" aria-labelledby="metrics-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Runtime telemetry</p>
-          <h2 id="metrics-heading">{mode === "api" ? "Backend counters" : "Demo counters"}</h2>
-        </div>
-      </div>
-      <div className="metric-grid">
-        {items.map(([label, value]) => (
-          <div className="metric" key={label}>
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function TranscriptPanel({ transcript }: { transcript: RunTranscript }) {
-  const rows = [
-    ["Latest scenario", transcript.latestScenario],
-    ["Latest AXL messages", transcript.axlMessageCount.toLocaleString()],
-    ["AXL nodes online", transcript.axlNodesOnline.toLocaleString()],
-    ["AXL latest type", transcript.axlLastMessageType],
-    ["AXL p50 latency", transcript.axlP50LatencyMs],
-    ["AXL p95 latency", transcript.axlP95LatencyMs],
-    ["AXL transcript path", transcript.axlTranscriptPath],
-    ["Latest 0G storage URI", transcript.zeroGStorageUri],
-    ["Latest 0G hash", transcript.zeroGStorageHash],
-    ["Latest iNFT token", transcript.inftToken],
-    ["Latest iNFT local address", transcript.inftAddress],
-    ["Latest Uniswap quote", transcript.uniswapQuote],
-    ["Latest Uniswap swap receipt", transcript.uniswapSwapReceipt],
-  ];
-
-  return (
-    <section className="panel transcript-panel" aria-labelledby="transcript-heading">
-      <div className="panel-heading">
-        <div>
-          <p className="eyebrow">Run transcript</p>
-          <h2 id="transcript-heading">Proof fields</h2>
-        </div>
-      </div>
-      <div className="transcript-list">
-        {rows.map(([label, value]) => (
-          <div className="transcript-row" key={label}>
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function TierStatusPanel({ agents }: { agents: SwarmAgent[] }) {
   const tierCounts = useMemo(
     () =>
       (["T1", "T2", "T3"] as AgentTier[]).map((tier) => ({
@@ -482,65 +431,161 @@ function TierStatusPanel({ agents }: { agents: SwarmAgent[] }) {
   );
 
   return (
-    <section className="panel compact-panel" aria-labelledby="tier-heading">
+    <section className="panel compact-metrics" aria-labelledby="metrics-heading">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">Inference routing</p>
-          <h2 id="tier-heading">Tier and status</h2>
+          <p className="eyebrow">▸ Telemetry</p>
+          <h2 id="metrics-heading">{mode === "api" ? "Backend ops" : "Demo ops"}</h2>
         </div>
       </div>
-      <div className="tier-list">
-        {tierCounts.map(({ tier, count }) => (
-          <div className="tier-row" key={tier}>
-            <span className={`tier-dot ${tier.toLowerCase()}`} />
-            <span>{tierLabels[tier]}</span>
-            <strong>{count}</strong>
-          </div>
-        ))}
+      <div className="cm-section">
+        <p className="cm-section-eyebrow">TIER ROUTING</p>
+        <div className="cm-tier-list">
+          {tierCounts.map(({ tier, count }) => (
+            <div className="cm-tier-row" key={tier}>
+              <span className={`cm-tier-dot ${tier.toLowerCase()}`} />
+              <span>{tierLabels[tier]}</span>
+              <strong>{count}</strong>
+            </div>
+          ))}
+        </div>
       </div>
-      <div className="status-grid">
-        {statusCounts.map(({ status, count }) => (
-          <div className={`status-chip ${status}`} key={status}>
-            <span>{statusLabels[status]}</span>
-            <strong>{count}</strong>
+      <div className="cm-section">
+        <p className="cm-section-eyebrow">STATUS</p>
+        <div className="cm-status-grid">
+          {statusCounts.map(({ status, count }) => (
+            <div className={`cm-status-chip ${status}`} key={status}>
+              <span>{statusLabels[status]}</span>
+              <strong>{count}</strong>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="cm-section">
+        <p className="cm-section-eyebrow">METRICS</p>
+        <div className="cm-metric-grid">
+          <div className="cm-metric">
+            <span>AXL_MSGS</span>
+            <strong>{metrics.axlMessages.toLocaleString()}</strong>
           </div>
-        ))}
+          <div className="cm-metric">
+            <span>NODES</span>
+            <strong>{metrics.axlNodesOnline.toLocaleString()}</strong>
+          </div>
+          <div className="cm-metric">
+            <span>P50</span>
+            <strong>
+              {metrics.axlP50LatencyMs === null ? "—" : `${metrics.axlP50LatencyMs.toFixed(1)}`}
+            </strong>
+          </div>
+          <div className="cm-metric">
+            <span>P95</span>
+            <strong>
+              {metrics.axlP95LatencyMs === null ? "—" : `${metrics.axlP95LatencyMs.toFixed(1)}`}
+            </strong>
+          </div>
+          <div className="cm-metric">
+            <span>0G_CALLS</span>
+            <strong>{metrics.zeroGInferenceCalls.toLocaleString()}</strong>
+          </div>
+          <div className="cm-metric">
+            <span>FALLBACK</span>
+            <strong>{metrics.fallbackCount.toLocaleString()}</strong>
+          </div>
+        </div>
       </div>
     </section>
   );
 }
 
-function Leaderboard({ entries }: { entries: LeaderboardEntry[] }) {
+function TranscriptPanel({ transcript }: { transcript: RunTranscript }) {
+  const [open, setOpen] = useState(false);
+
+  const rows = [
+    ["Scenario", transcript.latestScenario],
+    ["AXL msgs", transcript.axlMessageCount.toLocaleString()],
+    ["AXL nodes", transcript.axlNodesOnline.toLocaleString()],
+    ["AXL type", transcript.axlLastMessageType],
+    ["p50 latency", transcript.axlP50LatencyMs],
+    ["p95 latency", transcript.axlP95LatencyMs],
+    ["Transcript", transcript.axlTranscriptPath],
+    ["0G URI", transcript.zeroGStorageUri],
+    ["0G hash", transcript.zeroGStorageHash],
+    ["iNFT token", transcript.inftToken],
+    ["iNFT addr", transcript.inftAddress],
+    ["Uni quote", transcript.uniswapQuote],
+    ["Swap rcpt", transcript.uniswapSwapReceipt],
+  ];
+
+  return (
+    <section className="panel transcript-panel" aria-labelledby="transcript-heading">
+      <button
+        type="button"
+        className="transcript-toggle"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        id="transcript-heading"
+      >
+        <span>▸ Proof fields</span>
+        <span className="transcript-chevron" aria-hidden>
+          {open ? "▲" : "▼"}
+        </span>
+      </button>
+      {open ? (
+        <div className="transcript-list">
+          {rows.map(([label, value]) => (
+            <div className="transcript-row" key={label}>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function Leaderboard({
+  entries,
+  onSelectAgent,
+  selectedAgentSourceId,
+}: {
+  entries: LeaderboardEntry[];
+  onSelectAgent: (sourceId: string) => void;
+  selectedAgentSourceId: string | null;
+}) {
   return (
     <section className="panel leaderboard-panel" aria-labelledby="leaderboard-heading">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">Strategy selection</p>
+          <p className="eyebrow">▸ Strategy selection</p>
           <h2 id="leaderboard-heading">Leaderboard</h2>
         </div>
       </div>
       <div className="leaderboard-table" role="table" aria-label="Agent leaderboard">
         <div className="table-row table-head" role="row">
-          <span>Rank</span>
+          <span>#</span>
           <span>Agent</span>
           <span>Strategy</span>
           <span>Tier</span>
           <span>Score</span>
           <span>PNL</span>
-          <span>Risk</span>
         </div>
         {entries.map((entry) => {
           const isFirst = entry.rank === 1;
+          const isSelected = entry.agentId === selectedAgentSourceId;
           const pnlClass = entry.pnl >= 0 ? "pnl-positive" : "pnl-negative";
           const pnlPrefix = entry.pnl >= 0 ? "+" : "";
           return (
-            <div
-              className={`table-row${isFirst ? " rank-one" : ""}`}
+            <button
+              type="button"
+              className={`table-row${isFirst ? " rank-one" : ""}${isSelected ? " selected" : ""}`}
               role="row"
               key={entry.agentId}
+              onClick={() => onSelectAgent(entry.agentId)}
             >
               <span className="rank-cell">
-                {isFirst ? <span className="rank-trophy" aria-hidden>TOP</span> : null}
+                {isFirst ? <span className="rank-trophy" aria-hidden>★</span> : null}
                 <span>#{entry.rank}</span>
               </span>
               <strong>{entry.agentId}</strong>
@@ -551,8 +596,7 @@ function Leaderboard({ entries }: { entries: LeaderboardEntry[] }) {
                 {pnlPrefix}
                 {entry.pnl.toFixed(2)}%
               </span>
-              <span>{entry.risk.toFixed(2)}</span>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -560,28 +604,10 @@ function Leaderboard({ entries }: { entries: LeaderboardEntry[] }) {
   );
 }
 
-function MockBanner({ onDismiss }: { onDismiss: () => void }) {
-  return (
-    <div className="mock-banner" role="status">
-      <span className="mock-banner-text">
-        Running on mock data - connect backend for live swarm
-      </span>
-      <button
-        type="button"
-        className="mock-banner-close"
-        onClick={onDismiss}
-        aria-label="Dismiss banner"
-      >
-        x
-      </button>
-    </div>
-  );
-}
-
 export function App() {
-  const [scenario, setScenario] = useState(SCENARIO_PRESETS[0].text);
+  const [scenario, setScenario] = useState(DEFAULT_SCENARIO);
   const [agentCount, setAgentCount] = useState(250);
-  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const {
     agents,
     metrics,
@@ -592,7 +618,6 @@ export function App() {
     transcript,
     axlMessages,
     totalAgentCount,
-    inferenceBudget,
     isRunningScenario,
     error,
     runScenario,
@@ -600,32 +625,34 @@ export function App() {
 
   const previousModeRef = useRef(mode);
   useEffect(() => {
-    if (mode === "api" && previousModeRef.current === "mock") {
-      setBannerDismissed(false);
-    }
     previousModeRef.current = mode;
   }, [mode]);
 
-  const showMockBanner = mode === "mock" && !bannerDismissed;
+  const selectedAgent = useMemo(
+    () => agents.find((a) => a.id === selectedAgentId) ?? null,
+    [agents, selectedAgentId],
+  );
+
+  const selectedAgentSourceId = selectedAgent?.sourceId ?? null;
+
+  // When user clicks a leaderboard row, find a matching agent in the visual swarm.
+  const handleSelectFromLeaderboard = (sourceId: string) => {
+    const match = agents.find((a) => a.sourceId === sourceId);
+    if (match) setSelectedAgentId(match.id);
+  };
 
   return (
-    <main className="app-shell">
-      {showMockBanner ? <MockBanner onDismiss={() => setBannerDismissed(true)} /> : null}
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">HIVEMIND demo console</p>
-          <h1>DeFi swarm operations</h1>
-        </div>
-        {mode === "api" ? (
-          <div className="topbar-status">
-            <span className="live-dot" />
-            API WebSocket connected
-          </div>
-        ) : null}
-      </header>
+    <main className="app-root">
+      <HudBar
+        badges={badges}
+        mode={mode}
+        error={error}
+        tick={tick}
+        agentCount={totalAgentCount || agents.length}
+      />
 
-      <div className="dashboard-grid">
-        <div className="left-stack">
+      <div className="main-area">
+        <aside className="left-sidebar">
           <ScenarioPanel
             agentCount={agentCount}
             isRunningScenario={isRunningScenario}
@@ -634,27 +661,42 @@ export function App() {
             onScenarioChange={setScenario}
             scenario={scenario}
           />
-          <ConnectionStatusLine badges={badges} error={error} />
-          <TierStatusPanel agents={agents} />
-          <InferenceMetrics budget={inferenceBudget} />
-        </div>
-        <SwarmGraph
-          agents={agents}
-          axlMessages={axlMessages}
-          tick={tick}
-          totalAgentCount={totalAgentCount}
-          totalAxlMessages={metrics.axlMessages}
-        />
-        <div className="right-stack">
-          <CrystallizePanel
+          <CompactMetricsPanel metrics={metrics} agents={agents} mode={mode} />
+        </aside>
+
+        <section className="graph-viewport">
+          <SwarmGraph
+            agents={agents}
+            axlMessages={axlMessages}
+            tick={tick}
+            totalAgentCount={totalAgentCount}
+            totalAxlMessages={metrics.axlMessages}
+            onNodeClick={(nodeId) => setSelectedAgentId(nodeId)}
+            selectedNodeId={selectedAgentId}
+            onBackgroundClick={() => setSelectedAgentId(null)}
+          />
+          <AgentDetailPanel
+            agent={selectedAgent}
+            leaderboard={leaderboard}
+            onClose={() => setSelectedAgentId(null)}
+          />
+        </section>
+
+        <aside className="right-sidebar">
+          <Leaderboard
+            entries={leaderboard}
+            onSelectAgent={handleSelectFromLeaderboard}
+            selectedAgentSourceId={selectedAgentSourceId}
+          />
+          <TranscriptPanel transcript={transcript} />
+          <MintSection
             apiAvailable={mode === "api"}
-            mintConfigured={transcript.inftStatus === "active" || transcript.inftStatus === "minted"}
+            mintConfigured={
+              transcript.inftStatus === "active" || transcript.inftStatus === "minted"
+            }
             winningEntry={leaderboard[0]}
           />
-          <MetricPanel metrics={metrics} mode={mode} />
-          <TranscriptPanel transcript={transcript} />
-          <Leaderboard entries={leaderboard} />
-        </div>
+        </aside>
       </div>
     </main>
   );
