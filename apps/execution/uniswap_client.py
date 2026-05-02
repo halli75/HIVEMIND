@@ -127,7 +127,11 @@ class UniswapClient:
         return resp.json()
 
     async def build_swap_tx(self, quote: dict[str, Any], *, signature: str | None = None) -> dict[str, Any]:
-        body = dict(quote)
+        # The /v1/swap endpoint validates field types strictly: e.g. it rejects
+        # `permitData: null` with `"permitData" must be of type object`. Drop any
+        # top-level keys whose value is None so the API only sees fields it can
+        # validate.
+        body = {key: value for key, value in quote.items() if value is not None}
         if signature:
             body["signature"] = signature
         resp = await self._http.post(f"{self._base_url}/v1/swap", json=body)

@@ -6,6 +6,7 @@ any chain other than Sepolia.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
@@ -25,6 +26,29 @@ from uniswap_client import (
 
 DEFAULT_AMOUNT_IN_WEI = int(Decimal("0.001") * Decimal(10**18))
 ALLOW_SWAP_ENV = "HIVEMIND_ALLOW_TESTNET_SWAP"
+SKIP_CONFIRM_ENV = "HIVEMIND_SWAP_SKIP_CONFIRM"
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Quote and (optionally) submit a Sepolia WETH->USDC swap via the Uniswap Trading API.",
+    )
+    parser.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help=(
+            "Skip the interactive [y/N] confirmation prompt. Equivalent to "
+            f"setting {SKIP_CONFIRM_ENV}=true in the environment."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def _skip_confirm(args: argparse.Namespace) -> bool:
+    if args.yes:
+        return True
+    return os.environ.get(SKIP_CONFIRM_ENV, "").strip().lower() in {"1", "true", "yes"}
 
 
 def _find_first_key(value: object, key: str) -> object | None:
@@ -68,8 +92,10 @@ def _amount_in_wei() -> int:
     return amount
 
 
-async def main() -> int:
+async def main(argv: list[str] | None = None) -> int:
     load_dotenv()
+    args = _parse_args(argv)
+    skip_confirm = _skip_confirm(args)
 
     if os.environ.get(ALLOW_SWAP_ENV, "").strip().lower() not in {"1", "true", "yes"}:
         print(f"{ALLOW_SWAP_ENV}=true is required before submitting a Sepolia swap.", file=sys.stderr)
@@ -126,11 +152,14 @@ async def main() -> int:
     print(f"quote id:     {quote_id}")
     print()
 
-    answer = input("Submit swap on Sepolia? [y/N] ").strip().lower()
-    if answer != "y":
-        print("Aborted. No transaction sent.")
-        await client.aclose()
-        return 0
+    if skip_confirm:
+        print("Submit swap on Sepolia? [y/N] y  (auto-confirmed via --yes / HIVEMIND_SWAP_SKIP_CONFIRM)")
+    else:
+        answer = input("Submit swap on Sepolia? [y/N] ").strip().lower()
+        if answer != "y":
+            print("Aborted. No transaction sent.")
+            await client.aclose()
+            return 0
 
     try:
         tx_hash = await client.execute_swap(quote, private_key)
